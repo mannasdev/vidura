@@ -4,6 +4,10 @@ A local, open-source counselor that reads your Claude Code session logs
 and tells you the truth about your friction patterns — rarely, bluntly,
 with evidence.
 
+> Published on PyPI as **`vidura-cli`** (the `vidura` package name belongs
+> to an unrelated agent orchestrator). The importable module and all
+> commands are still `vidura` / `vidura-*`.
+
 ## Status
 
 Pre-M0. This is the reflector-only build: `vidura report` reads your last

@@ -1,5 +1,8 @@
 [project]
-name = "vidura"
+# PyPI name is vidura-cli: "vidura" on PyPI is an unrelated, actively
+# maintained agent orchestrator (name-collision check, 2026-07-10).
+# The project/brand stays Vidura; the import package stays `vidura`.
+name = "vidura-cli"
 version = "0.0.1"
 description = "A local counselor that reads your Claude Code session logs and tells you the truth about your friction patterns."
 requires-python = ">=3.11"
