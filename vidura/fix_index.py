@@ -12,12 +12,33 @@ from dataclasses import dataclass
 
 
 @dataclass
+class FixAction:
+    """Design doc Decision 2 — the action schema. All fields on Fix are
+    optional; a fix with no action is INFORM (tier 0, remedy text only).
+
+    Field usage varies by tier (v1 supports tiers 1-3):
+      tier 1 (COPY):  payload is the exact clipboard text; argv/target_file unused.
+      tier 2 (WRITE): payload is the block to append; target_file is the
+                      repo-root-relative destination (e.g. "CLAUDE.md").
+      tier 3 (RUN):   argv is the exact argv list (never a shell string);
+                      payload unused.
+    """
+
+    tier: int
+    label: str
+    payload: str
+    argv: list[str] | None = None
+    target_file: str | None = None
+
+
+@dataclass
 class Fix:
     id: str
     title: str
     friction_patterns: list[str]
     remedy: str
     confidence_floor: float
+    action: FixAction | None = None
 
 
 FIX_INDEX: list[Fix] = [
@@ -103,6 +124,11 @@ FIX_INDEX: list[Fix] = [
             "brainstorming pass before implementation removes whole rounds of rework."
         ),
         confidence_floor=0.7,
+        action=FixAction(
+            tier=1,
+            label="Copy /office-hours",
+            payload="/office-hours",
+        ),
     ),
     Fix(
         id="examples-first-prompting",
@@ -146,6 +172,23 @@ FIX_INDEX: list[Fix] = [
             "every session."
         ),
         confidence_floor=0.7,
+        action=FixAction(
+            tier=2,
+            label="Write a CLAUDE.md starter",
+            payload=(
+                "\n# Project\n\n"
+                "## Commands\n"
+                "- Build: TODO\n"
+                "- Test: TODO\n"
+                "- Run: TODO\n\n"
+                "## Conventions\n"
+                "- TODO: formatting/lint tool\n"
+                "- TODO: directory layout notes\n\n"
+                "## Gotchas\n"
+                "- TODO: things that keep tripping up new sessions\n"
+            ),
+            target_file="CLAUDE.md",
+        ),
     ),
     Fix(
         id="stale-claude-md",
@@ -174,6 +217,12 @@ FIX_INDEX: list[Fix] = [
             "itself — turning describe-check loops into one autonomous pass."
         ),
         confidence_floor=0.7,
+        action=FixAction(
+            tier=3,
+            label="Install the Playwright MCP",
+            payload="",
+            argv=["claude", "mcp", "add", "playwright", "--", "npx", "-y", "@playwright/mcp@latest"],
+        ),
     ),
     Fix(
         id="github-context-by-paste",
@@ -188,6 +237,12 @@ FIX_INDEX: list[Fix] = [
             "without copy-paste relays."
         ),
         confidence_floor=0.65,
+        action=FixAction(
+            tier=3,
+            label="Install gh CLI",
+            payload="",
+            argv=["brew", "install", "gh"],
+        ),
     ),
     Fix(
         id="docs-by-paste",
@@ -215,6 +270,12 @@ FIX_INDEX: list[Fix] = [
             "then fix. The test is the only durable proof the bug stays dead."
         ),
         confidence_floor=0.65,
+        action=FixAction(
+            tier=3,
+            label="Install the test-driven-development skill",
+            payload="",
+            argv=["npx", "-y", "skillfish", "add", "obra/superpowers", "test-driven-development"],
+        ),
     ),
     Fix(
         id="shotgun-debugging",
@@ -230,6 +291,12 @@ FIX_INDEX: list[Fix] = [
             "informed fix. A systematic-debugging skill enforces this order."
         ),
         confidence_floor=0.7,
+        action=FixAction(
+            tier=3,
+            label="Install the systematic-debugging skill",
+            payload="",
+            argv=["npx", "-y", "skillfish", "add", "obra/superpowers", "systematic-debugging"],
+        ),
     ),
     Fix(
         id="monolith-prompt",
@@ -272,6 +339,11 @@ FIX_INDEX: list[Fix] = [
             "genuinely destructive."
         ),
         confidence_floor=0.6,
+        action=FixAction(
+            tier=1,
+            label="Copy /fewer-permission-prompts",
+            payload="/fewer-permission-prompts",
+        ),
     ),
     Fix(
         id="parallel-work-collision",
