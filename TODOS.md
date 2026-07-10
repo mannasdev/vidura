@@ -43,3 +43,17 @@
 **Cons:** ~10-15 claude -p calls per report (cost/time); merge logic is new surface area.
 
 **Depends on:** nothing — buildable immediately on the current reflect/report code.
+
+---
+
+## Execution-mechanism design pass (blocks M3, not M1)
+
+**What:** Decide how the pet executes accepted remedies: (a) run `action.install` commands directly, (b) delegate to `claude -p`, or (c) tiered by `action.kind` — likely (c). Full option analysis in the design doc's "Frontend & Agency Pivot" section.
+
+**Why:** The end goal changed (2026-07-10): the M3 frontend is a menu-bar tamagotchi-style pet that can act on accepted suggestions — a deliberate reversal of the original "Vidura suggests; the human acts" non-goal.
+
+**Non-negotiables (already settled):** per-action explicit confirmation with the exact command shown; executions logged to the ledger; kill switch; no execution for `novel` suggestions until the ledger has feedback history.
+
+**Cons/risks:** An executing fix index is a much larger trust surface than a suggesting one — this interacts with the existing "fork sandboxing" TODO and gets serious the moment community PRs can carry install commands.
+
+**Depends on:** M1 ledger (executions must be logged against suggestions); recommend running this as its own /office-hours or /spec pass before M3 scoping.

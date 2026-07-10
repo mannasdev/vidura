@@ -3,7 +3,14 @@
 Ideas that are real but not v1. The design doc's scope rule: five organs
 (six, post-correction), four milestones — everything else lives here.
 
-## Desktop pet frontend (alternative to the menubar widget)
+## ~~Desktop pet frontend (alternative to the menubar widget)~~ — PROMOTED
+
+**2026-07-10:** No longer deferred. Mannas made the menu-bar tamagotchi-style
+pet the M3 end goal, including per-action-confirmed execution of remedies.
+See the design doc's "Frontend & Agency Pivot" section — the sleeping-sage
+restraint framing below carried over as the pet's core personality.
+
+## (original deferred entry, kept for the reasoning)
 
 **Idea (Mannas, 2026-07-10):** instead of (or alongside) the M3 menubar
 widget, Vidura lives on screen as a small pet/companion.
