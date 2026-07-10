@@ -49,3 +49,31 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     conn.commit()
     return conn
+
+
+def needs_reflection(conn: sqlite3.Connection, path: Path) -> bool:
+    """True if this session file is unseen or has changed (mtime/size)
+    since it was last reflected. Active session files keep growing —
+    a changed file gets re-reflected in full; dedup of its repeated
+    suggestions is the ledger's job, not this function's."""
+    st = path.stat()
+    row = conn.execute(
+        "SELECT mtime, size FROM sessions WHERE path = ?", (str(path),)
+    ).fetchone()
+    if row is None:
+        return True
+    return not (abs(row["mtime"] - st.st_mtime) < 1e-6 and row["size"] == st.st_size)
+
+
+def mark_reflected(conn: sqlite3.Connection, path: Path) -> None:
+    st = path.stat()
+    conn.execute(
+        """INSERT INTO sessions(path, mtime, size, reflected_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(path) DO UPDATE SET
+             mtime = excluded.mtime,
+             size = excluded.size,
+             reflected_at = excluded.reflected_at""",
+        (str(path), st.st_mtime, st.st_size, _now()),
+    )
+    conn.commit()
