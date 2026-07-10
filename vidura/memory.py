@@ -55,27 +55,31 @@ def search_chunks(
     if not query:
         return []
     exclude = exclude_sessions or set()
+    ordered_exclude = sorted(exclude)
+    placeholders = ", ".join("?" for _ in ordered_exclude)
+    exclusion_sql = f" AND c.session_path NOT IN ({placeholders})" if ordered_exclude else ""
     if fts_available(conn):
         rows = conn.execute(
             "SELECT c.id, c.session_path, c.text, bm25(chunks_fts) AS score, c.created_at "
             "FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid "
-            "WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?",
-            (query, k + len(exclude) * k),
+            f"WHERE chunks_fts MATCH ?{exclusion_sql} ORDER BY score LIMIT ?",
+            (query, *ordered_exclude, k),
         ).fetchall()
     else:
         print("vidura: FTS5 unavailable, LIKE fallback", file=sys.stderr)
-        first = terms[0]
+        first = next((t for t in terms if t.strip()), None)
+        if first is None:
+            return []
+        exclusion_sql_like = exclusion_sql.replace("c.session_path", "session_path")
         rows = conn.execute(
             "SELECT id, session_path, text, 0.0 AS score, created_at FROM chunks "
-            "WHERE text LIKE ? ORDER BY id DESC LIMIT ?",
-            (f"%{first}%", k + len(exclude) * k),
+            f"WHERE text LIKE ?{exclusion_sql_like} ORDER BY id DESC LIMIT ?",
+            (f"%{first}%", *ordered_exclude, k),
         ).fetchall()
-    hits = [
+    return [
         ChunkHit(r["id"], r["session_path"], r["text"], r["score"], r["created_at"])
         for r in rows
-        if r["session_path"] not in exclude
     ]
-    return hits[:k]
 
 
 def prune_chunks(conn: sqlite3.Connection, days: int = 90) -> int:

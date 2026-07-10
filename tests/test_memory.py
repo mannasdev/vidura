@@ -33,6 +33,17 @@ def test_search_excludes_sessions(tmp_path):
     conn.close()
 
 
+def test_search_exclusion_cannot_starve_results(tmp_path):
+    conn = _db(tmp_path)
+    # excluded session dominates the ranking with 20 matching chunks
+    remember_chunks(conn, "/s/current.jsonl", [f"[user] timeout error variant {i}" for i in range(20)])
+    remember_chunks(conn, "/s/history.jsonl", ["[user] timeout error seen once long ago"])
+    hits = search_chunks(conn, ["timeout error"], k=5, exclude_sessions={"/s/current.jsonl"})
+    assert len(hits) == 1
+    assert hits[0].session_path == "/s/history.jsonl"
+    conn.close()
+
+
 def test_search_empty_terms_returns_empty(tmp_path):
     conn = _db(tmp_path)
     remember_chunks(conn, "/s/a.jsonl", ["[user] anything"])
