@@ -88,3 +88,77 @@ def test_pack_batches_oversized_session_gets_own_batch():
     batches = pack_batches([big, small], budget_chars=48000)
     assert len(batches) == 2
     assert batches[0][0].path.name == "big"
+
+
+from unittest.mock import patch
+
+from vidura.contract import CONTRACT_VERSION, ReflectResponse, Suggestion
+from vidura.reflect import ReflectorError
+from vidura.store import ledger_entries, needs_reflection
+from vidura.sweep import run_sweep
+
+
+def _work(tmp_path, name, streaks=1):
+    p = _write_friction_session(tmp_path, name)
+    return SessionWork(path=p, chunks=[f"[user] chunk of {name}"], streak_count=streaks)
+
+
+def _response(fix_id="judge-executor-split", confidence=0.85):
+    return ReflectResponse(
+        contract_version=CONTRACT_VERSION,
+        suggestions=[Suggestion(fix_id=fix_id, confidence=confidence, evidence=["q"], blunt_summary="s")],
+    )
+
+
+def test_run_sweep_records_and_marks(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    batches = [[_work(tmp_path, "a.jsonl")], [_work(tmp_path, "b.jsonl")]]
+    with patch("vidura.sweep.reflect", return_value=_response()):
+        stats = run_sweep(conn, batches)
+    assert stats["batches_run"] == 2
+    assert stats["sessions_reflected"] == 2
+    assert not needs_reflection(conn, batches[0][0].path)
+    rows = ledger_entries(conn, status="pending")
+    assert len(rows) == 1  # same fix_id from both batches merged
+    assert rows[0]["occurrences"] == 2
+    conn.close()
+
+
+def test_failed_batch_not_marked_and_sweep_continues(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    batches = [[_work(tmp_path, "a.jsonl")], [_work(tmp_path, "b.jsonl")]]
+    responses = [ReflectorError("session limit"), _response()]
+    def _side_effect(*args, **kwargs):
+        r = responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    with patch("vidura.sweep.reflect", side_effect=_side_effect):
+        stats = run_sweep(conn, batches)
+    assert stats["batches_failed"] == 1
+    assert needs_reflection(conn, batches[0][0].path) is True   # resume target
+    assert needs_reflection(conn, batches[1][0].path) is False
+    conn.close()
+
+
+def test_max_batches_limits_work(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    batches = [[_work(tmp_path, f"{i}.jsonl")] for i in range(5)]
+    with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
+        stats = run_sweep(conn, batches, max_batches=2)
+    assert mock_reflect.call_count == 2
+    assert stats["batches_run"] == 2
+    conn.close()
+
+
+def test_sweep_passes_ledger_to_reflector(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    from vidura.store import record_suggestion, set_status
+    record_suggestion(conn, Suggestion(fix_id="repeated-error-loop", confidence=0.9, evidence=["e"], blunt_summary="old"))
+    set_status(conn, ledger_entries(conn)[0]["id"], "dismissed")
+    batches = [[_work(tmp_path, "a.jsonl")]]
+    with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
+        run_sweep(conn, batches)
+    request = mock_reflect.call_args[0][0]
+    assert any(e["fix_id"] == "repeated-error-loop" and e["status"] == "dismissed" for e in request.ledger)
+    conn.close()

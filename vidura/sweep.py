@@ -8,16 +8,19 @@ marked reflected only when their batch succeeds, so an interrupted
 sweep (session limit, ctrl-C) resumes where it left off.
 """
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from vidura.chunk import chunk_turns
-from vidura.contract import PAYLOAD_BUDGET_CHARS
+from vidura.contract import CONTRACT_VERSION, PAYLOAD_BUDGET_CHARS, ReflectRequest
+from vidura.fix_index import load_fix_index
 from vidura.ingest import parse_session
 from vidura.redact import redact
+from vidura.reflect import reflect
 from vidura.report import CLAUDE_PROJECTS_DIR, DEFAULT_WINDOW_DAYS, find_recent_sessions
 from vidura.signals import extract_signals
-from vidura.store import needs_reflection
+from vidura.store import ledger_summary_for_prompt, mark_reflected, needs_reflection, record_suggestion
 
 PER_SESSION_CHUNK_BUDGET = 24000
 
@@ -82,3 +85,57 @@ def pack_batches(work: list[SessionWork], budget_chars: int = PAYLOAD_BUDGET_CHA
     if current:
         batches.append(current)
     return batches
+
+
+def _batch_request(conn, batch: list[SessionWork]) -> ReflectRequest:
+    chunks = [c for w in batch for c in w.chunks]
+    fix_index_dicts = [
+        {
+            "id": f.id,
+            "title": f.title,
+            "friction_patterns": f.friction_patterns,
+            "remedy": f.remedy,
+            "confidence_floor": f.confidence_floor,
+        }
+        for f in load_fix_index()
+    ]
+    return ReflectRequest(
+        contract_version=CONTRACT_VERSION,
+        signals={
+            "sessions_in_batch": len(batch),
+            "reprompt_streaks_in_batch": sum(w.streak_count for w in batch),
+        },
+        chunks=chunks,
+        fix_index=fix_index_dicts,
+        ledger=ledger_summary_for_prompt(conn),
+    )
+
+
+def run_sweep(
+    conn,
+    batches: list[list[SessionWork]],
+    backend: str = "auto",
+    max_batches: int | None = None,
+) -> dict:
+    stats = {"batches_run": 0, "batches_failed": 0, "sessions_reflected": 0, "suggestions_recorded": 0}
+    selected = batches if max_batches is None else batches[:max_batches]
+    for i, batch in enumerate(selected, start=1):
+        request = _batch_request(conn, batch)
+        try:
+            response = reflect(request, backend=backend)
+        except Exception as exc:
+            # Same silence principle as the report: a failed batch is
+            # skipped and logged; its sessions stay unmarked so the next
+            # sweep resumes exactly here.
+            print(f"vidura sweep: batch {i}/{len(selected)} failed, will retry next run: {exc}", file=sys.stderr)
+            stats["batches_failed"] += 1
+            continue
+        for suggestion in response.suggestions:
+            record_suggestion(conn, suggestion)
+            stats["suggestions_recorded"] += 1
+        for w in batch:
+            mark_reflected(conn, w.path)
+            stats["sessions_reflected"] += 1
+        stats["batches_run"] += 1
+        print(f"vidura sweep: batch {i}/{len(selected)} done ({len(batch)} sessions)", file=sys.stderr)
+    return stats
