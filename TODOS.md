@@ -29,3 +29,17 @@
 **Context:** Only becomes load-bearing post-M3 (public v1 release) if a fork ecosystem actually materializes around the `vidura-reflect` contract. Until then, this is a placeholder so the question isn't forgotten.
 
 **Depends on:** M3 shipping and the JSON contract (Next Steps #3) being stable enough that forks are viable in the first place.
+
+---
+
+## Multi-pass (map-reduce) reflection sweep — M0→M1 bridge
+
+**What:** Batch all ~645 sessions into N payload-budget-sized groups, run one claude -p reflection per group, merge suggestions (dedupe by fix_id, keep highest-confidence evidence).
+
+**Why:** M0's conditional pass verdict (2026-07-10): one 48k-char pass covers ~1% of the 30-day window and produced 1 real suggestion; the ≥3 bar failed on coverage, not judgment. 112 true human re-prompt streaks exist in the signals but most never reach the model in a single pass.
+
+**Pros:** Answers the kill criterion's letter with full coverage; the merge step is a natural precursor to M1's ledger semantics (dedupe/never-repeat logic).
+
+**Cons:** ~10-15 claude -p calls per report (cost/time); merge logic is new surface area.
+
+**Depends on:** nothing — buildable immediately on the current reflect/report code.
