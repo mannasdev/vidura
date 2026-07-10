@@ -54,6 +54,44 @@ def test_session_end_recursion_guard_raw_form(tmp_path, monkeypatch):
     assert not (support / "sweep.lock").exists()
 
 
+def test_session_end_recursion_guard_nested_dict(tmp_path, monkeypatch):
+    support, _ = _setup(tmp_path, monkeypatch)
+    _stdin(
+        monkeypatch,
+        {"session": {"cwd": f"/Users/x/{RECURSION_TOKEN_RAW}/whatever"}},
+    )
+    assert cmd_session_end([]) == 0
+    assert not (support / "sweep.lock").exists()
+
+
+def test_session_end_recursion_guard_list_form(tmp_path, monkeypatch):
+    support, _ = _setup(tmp_path, monkeypatch)
+    _stdin(
+        monkeypatch,
+        {"paths": ["/Users/x/somewhere", f"/Users/x/{RECURSION_TOKEN_RAW}/x"]},
+    )
+    assert cmd_session_end([]) == 0
+    assert not (support / "sweep.lock").exists()
+
+
+def test_session_end_recursion_guard_deeply_nested(tmp_path, monkeypatch):
+    support, _ = _setup(tmp_path, monkeypatch)
+    _stdin(
+        monkeypatch,
+        {
+            "a": {
+                "b": {
+                    "c": [
+                        {"cwd": f"/Users/x/{CLAUDE_CLI_CWD_TOKEN}/deep"},
+                    ]
+                }
+            }
+        },
+    )
+    assert cmd_session_end([]) == 0
+    assert not (support / "sweep.lock").exists()
+
+
 def test_session_start_recursion_guard_silent(tmp_path, monkeypatch, capsys):
     _setup(tmp_path, monkeypatch)
     conn = open_db()
@@ -211,6 +249,21 @@ def test_install_creates_settings_when_missing(tmp_path, monkeypatch):
     data = json.loads(settings.read_text(encoding="utf-8"))
     assert "SessionEnd" in data["hooks"]
     assert "SessionStart" in data["hooks"]
+
+
+def test_install_refuses_malformed_existing_settings(tmp_path, monkeypatch, capsys):
+    _, settings = _setup(tmp_path, monkeypatch)
+    settings.parent.mkdir(parents=True)
+    original = "{not valid json at all"
+    settings.write_text(original, encoding="utf-8")
+
+    assert cmd_install([]) == 1
+
+    assert settings.read_text(encoding="utf-8") == original
+    out = capsys.readouterr().out
+    assert "not valid JSON" in out
+    backups = list(tmp_path.glob("claude/settings.json.vidura-backup-*"))
+    assert len(backups) == 0
 
 
 def test_uninstall_removes_only_vidura_entries(tmp_path, monkeypatch):

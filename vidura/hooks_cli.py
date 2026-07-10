@@ -70,13 +70,20 @@ def _log_path() -> Path:
     return _support_dir() / "hook-sweep.log"
 
 
+# Hard cap on how much stdin we'll ever read for a hook payload. Claude
+# Code hook payloads are small JSON objects; this bounds worst-case
+# memory/parse cost if something feeds the hook a huge or unbounded
+# stream instead of the expected payload.
+STDIN_READ_CAP = 2_000_000
+
+
 def _read_stdin_json() -> dict:
     """Best-effort stdin JSON parse. Missing/invalid/empty stdin must
     never crash the hook — treat any of it as an empty dict."""
     try:
         if sys.stdin.isatty():
             return {}
-        raw = sys.stdin.read()
+        raw = sys.stdin.read(STDIN_READ_CAP)
         if not raw or not raw.strip():
             return {}
         payload = json.loads(raw)
@@ -85,18 +92,34 @@ def _read_stdin_json() -> dict:
         return {}
 
 
+def _walk_strings(obj):
+    """Recursively yield every string value nested anywhere inside obj.
+
+    Hook payloads are arbitrary, Claude-Code-controlled JSON — the
+    recursion-guard token can show up several levels deep (e.g. inside a
+    nested "session" dict or a list of paths), so the guard must walk
+    the full structure rather than only the top-level values."""
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for value in obj.values():
+            yield from _walk_strings(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _walk_strings(item)
+
+
 def _is_reflector_session(payload: dict) -> bool:
     """Recursion guard: a claude -p reflector session's own cwd (or
     transcript path) must never trigger another sweep. Matches on either
     the CLAUDE_CLI_CWD_TOKEN ("-vidura-reflector-cwd", the actual
     directory-name marker reflect.py creates) or the raw
     ".vidura/reflector-cwd" substring, checked against every string
-    value the hook payload carries (cwd, transcript_path, etc.) since
-    the exact key Claude Code uses isn't part of our contract."""
-    for value in payload.values():
-        if isinstance(value, str) and (
-            CLAUDE_CLI_CWD_TOKEN in value or RECURSION_TOKEN_RAW in value
-        ):
+    value found anywhere in the hook payload (cwd, transcript_path,
+    nested dicts/lists, etc.) since the exact shape Claude Code uses
+    isn't part of our contract."""
+    for value in _walk_strings(payload):
+        if CLAUDE_CLI_CWD_TOKEN in value or RECURSION_TOKEN_RAW in value:
             return True
     return False
 
@@ -138,6 +161,13 @@ def cmd_session_end(argv: list[str]) -> int:
     payload = _read_stdin_json()
     if _is_reflector_session(payload):
         return 0
+    # TOCTOU note: the cooldown and lock checks below are best-effort
+    # gates, not mutexes — there's a window between checking and writing
+    # each file where a second, near-simultaneous session-end could slip
+    # through. That's tolerated on purpose: sweeps are resume-safe (a
+    # sweep picks up wherever the last one left off) and a double-spawn
+    # racing on the same SQLite ledger just degrades to one of them
+    # skipping a batch, not to corruption or lost data.
     if _within_cooldown():
         return 0
     if _lock_blocks():
@@ -232,6 +262,14 @@ def cmd_install(argv: list[str]) -> int:
     original_text = None
     if settings_path.exists():
         original_text = settings_path.read_text(encoding="utf-8")
+        try:
+            json.loads(original_text)
+        except json.JSONDecodeError:
+            print(
+                f"vidura-hook: existing settings.json is not valid JSON — "
+                f"fix it first; nothing was changed ({settings_path})"
+            )
+            return 1
 
     settings = _load_settings(settings_path)
     changed = False
