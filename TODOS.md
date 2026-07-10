@@ -57,3 +57,15 @@
 **Cons/risks:** An executing fix index is a much larger trust surface than a suggesting one — this interacts with the existing "fork sandboxing" TODO and gets serious the moment community PRs can carry install commands.
 
 **Depends on:** M1 ledger (executions must be logged against suggestions); recommend running this as its own /office-hours or /spec pass before M3 scoping.
+
+---
+
+## Mood engine + follow-through tracking (M3 pet personality, designed 2026-07-10)
+
+**What:** Deterministic mood engine (~6 states: ASLEEP/STIRRING/RECOGNITION/CONCERNED/PROUD/POKED) as a pure read-model over existing signals+ledger data; follow-through tracking (fix_id → target signal, before/after rate comparison → ledger statuses `adopted`/`lapsed`, one-time celebration); recognition moments as a second consumer of M1-full's search_chunks.
+
+**Why:** "Playfulness lives in the body; truth lives in the mouth" — continuous body language expressing only verifiable memory state keeps the pet playful without touching the suggestion gates. Full design in the gstack design doc's "Pet Personality Architecture" section.
+
+**Depends on:** M1-full (recognition needs FTS memory); ledger schema addition (two statuses); M3 for the rendering.
+
+**Sequencing note:** follow-through tracking is frontend-independent — it could ship with M1-full (pure store/signals work) and the pet inherits it later.
