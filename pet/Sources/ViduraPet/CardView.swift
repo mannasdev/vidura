@@ -48,17 +48,15 @@ struct CardView: View {
         state.mood?.adoptedUncelebratedIds ?? []
     }
 
-    /// The panel header IS the pet: a large placeholder face (mood ->
-    /// symbol mapping lives in Mood.faceSymbolName, ready to be swapped
-    /// for real designer art later) next to the "Vidura" title and mood
+    /// The panel header IS the pet: a small pixel-art creature (mood ->
+    /// grid mapping lives in PixelPetGrid.grid(for:), the one designer
+    /// swap point for future art) next to the "Vidura" title and mood
     /// word. Static swap only on mood change — no animation, per the
     /// anti-Clippy invariant.
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Image(systemName: currentMood.faceSymbolName)
-                    .font(.system(size: 72, weight: .regular))
-                    .foregroundStyle(.mint)
+                PixelPet(mood: currentMood)
                     .frame(width: 72, height: 72)
 
                 VStack(alignment: .leading, spacing: 2) {

@@ -18,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
+            // Drawn in code (PixelPetMenuBarMark), never an SF Symbol
+            // lookup that could fail to resolve — the button image must
+            // ALWAYS be non-nil, or a crowded menu bar can render an
+            // empty status item with no anchor for the popover.
             button.image = Self.menuBarImage()
             button.target = self
             button.action = #selector(togglePopover(_:))
@@ -66,13 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The one fixed menu-bar mark, rendered in template mode so AppKit
     /// tints it correctly for both light and dark menu bars, and for the
-    /// selected/highlighted state when the popover is open.
-    private static func menuBarImage() -> NSImage? {
-        let image = NSImage(
-            systemSymbolName: Mood.menuBarSymbolName,
-            accessibilityDescription: "Vidura"
-        )
-        image?.isTemplate = true
+    /// selected/highlighted state when the popover is open. Drawn in
+    /// code (never an SF Symbol lookup) so this is never nil.
+    private static func menuBarImage() -> NSImage {
+        let image = PixelPetMenuBarMark.image()
+        image.accessibilityDescription = "Vidura"
         return image
     }
 
@@ -80,11 +82,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button, let popover else { return }
         if popover.isShown {
             popover.performClose(sender)
-        } else {
-            state.refresh()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
+            return
         }
+
+        state.refresh()
+
+        // Accessory apps (no Dock icon, no menu bar menu of their own)
+        // can otherwise show the popover anchored to a stale/drifted
+        // point — especially in a crowded menu bar — unless the app is
+        // explicitly activated immediately before the popover is shown.
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Only ever anchor to a real, laid-out button window. If AppKit
+        // hasn't given the status item a window yet (can happen right
+        // after launch, or if the item was squeezed out by a crowded
+        // menu bar), skip showing rather than risk a detached, floating
+        // popover with an arrow pointing at nothing. No crash either way.
+        guard button.window != nil else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 }
 
