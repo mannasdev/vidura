@@ -110,6 +110,30 @@ sweep is the expensive one and incremental runs cost pennies. An
 interrupted sweep (session limit, ctrl-C) resumes where it left off —
 sessions are only marked seen when their batch succeeds.
 
+### Claude Code hooks (optional)
+
+Vidura can plug into [Claude Code's lifecycle hooks](https://docs.claude.com/en/docs/claude-code/hooks)
+so reflection happens event-driven instead of only on a cron tick:
+
+- **SessionEnd** — the moment a Claude Code session ends, spawns a
+  detached incremental sweep (`vidura-sweep --batches 3`) in the
+  background. Guarded by a 15-minute cooldown and a lockfile so rapid
+  session ends can't pile up sweeps, and returns in milliseconds — it
+  never blocks Claude Code's shutdown.
+- **SessionStart** — if you have pending suggestions, prints one line
+  (`Vidura: N suggestion(s) pending — ...`) and nothing otherwise.
+
+```bash
+vidura-hook install     # merge both hooks into ~/.claude/settings.json
+vidura-hook status      # check what's installed
+vidura-hook uninstall   # remove just Vidura's entries, leave others intact
+```
+
+`install` is idempotent and backs up your existing `settings.json` first.
+Privacy note: per Claude Code's hook contract, whatever the SessionStart
+hook prints to stdout is added to that session's context — so the one-line
+pending-suggestions nudge becomes something Claude itself can see.
+
 ## The pet (menu-bar companion)
 
 Vidura's face: a small menu-bar presence that sleeps almost always —

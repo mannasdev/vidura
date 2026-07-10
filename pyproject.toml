@@ -18,6 +18,10 @@ vidura-sweep = "vidura.sweep:main"
 vidura-ledger = "vidura.ledger_cli:main"
 vidura-do = "vidura.do_cli:main"
 vidura-state = "vidura.state_cli:main"
+vidura-hook = "vidura.hooks_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vidura*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
