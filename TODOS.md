@@ -1,0 +1,31 @@
+# TODOS
+
+## Reflector payload token/char budget
+
+**What:** Pick the exact token/char budget number for the `vidura-reflect` stdin payload cap.
+
+**Why:** The JSON contract needs a real, enforced number so an unbounded payload can't silently overflow the reflector model's context window (Eng Review Finding 7, `/plan-eng-review` on the initial design doc).
+
+**Pros:** Turns a silent-degradation risk into an explicit, testable constraint. Any reflector implementation (including future forks) can rely on the documented cap.
+
+**Cons:** Can't be picked correctly until real Claude Code session sizes are measured and the M0 model's actual context window is known — picking a number too early risks guessing wrong in either direction (too tight loses signal, too loose still overflows).
+
+**Context:** Part of the `vidura-reflect` JSON contract spec (design doc Next Steps #3). The contract ships with a documented budget from day one; this TODO is specifically about replacing the placeholder with a measured number once M0's reflector script exists and has run against real logs.
+
+**Depends on:** Next Steps #3 (contract spec drafted) and #4 (M0 reflector script built and run against real logs) from `~/.gstack/projects/vidura/mannas-unknown-design-20260710-033228.md`.
+
+---
+
+## Sandboxing/permission model for third-party reflector forks
+
+**What:** Design a sandboxing or permission model for `vidura-reflect` implementations that aren't the author's own — i.e. community forks, once they exist.
+
+**Why:** Approach C's subprocess boundary makes the reflector swappable by design, and mentions community forks as a possible side-benefit (design doc, Approach C). A swapped-in reflector receives redacted-but-still-sensitive chunk text on stdin with no sandboxing or network restriction — fine while Vidura is single-player (Premise #1, you control both sides of the contract), but a real security question the moment someone else's reflector code runs against your session logs.
+
+**Pros:** Closes a real security gap before OSS release invites forks. Costs nothing to write down now, while the contract is still being designed — much cheaper than retrofitting sandboxing after forks already exist in the wild.
+
+**Cons:** Pure speculative work for v1 — no third party is swapping reflectors yet, and Premise #1 explicitly scopes v1 as single-player. Building this now would be solving a problem that doesn't exist yet.
+
+**Context:** Only becomes load-bearing post-M3 (public v1 release) if a fork ecosystem actually materializes around the `vidura-reflect` contract. Until then, this is a placeholder so the question isn't forgotten.
+
+**Depends on:** M3 shipping and the JSON contract (Next Steps #3) being stable enough that forks are viable in the first place.
