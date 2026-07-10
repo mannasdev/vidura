@@ -5,6 +5,7 @@ confirm is always a fake callable (tests never touch a TTY), and any
 file writes land in tmp_path via monkeypatch.chdir.
 """
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -262,6 +263,130 @@ def test_dry_run_records_nothing_run_tier(tmp_path, monkeypatch):
         mock_run.assert_not_called()
     assert status == "dry-run"
     assert executions_for(conn, row["id"]) == []
+
+
+def test_write_rejects_absolute_path_escape(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(
+            tier=2, label="Write", payload="pwned\n", target_file="/etc/hosts"
+        ),
+    )
+    with pytest.raises(ValueError):
+        execute_action(conn, row, fix, confirm=_always_yes)
+    assert not Path("/etc/hosts").read_text().startswith("pwned")
+    assert executions_for(conn, row["id"]) == []
+
+
+def test_write_rejects_dotdot_escape(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(
+            tier=2,
+            label="Write",
+            payload="pwned\n",
+            target_file="../escape.md",
+        ),
+    )
+    with pytest.raises(ValueError):
+        execute_action(conn, row, fix, confirm=_always_yes)
+    assert not (tmp_path.parent / "escape.md").exists()
+    assert executions_for(conn, row["id"]) == []
+
+
+def test_decode_error_still_records_audit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "github-context-by-paste")
+    fix = Fix(
+        id="github-context-by-paste",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=3, label="Install gh", payload="", argv=["brew", "install", "gh"]),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = b"\xff\xfe invalid utf8 \x80"
+        mock_run.return_value.stderr = b""
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "done"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+
+
+def test_none_action_raises_value_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "judge-executor-split")
+    fix = Fix(
+        id="judge-executor-split",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=None,
+    )
+    with pytest.raises(ValueError, match="fix has no executable action"):
+        execute_action(conn, row, fix, confirm=_always_yes)
+
+
+def test_dry_run_works_under_kill_switch(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VIDURA_EXECUTION", "off")
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=2, label="Write CLAUDE.md", payload="# Project\n", target_file="CLAUDE.md"),
+    )
+    status = execute_action(conn, row, fix, confirm=_always_yes, dry_run=True)
+    assert status == "dry-run"
+    out = capsys.readouterr().out
+    assert "dry-run" in out.lower()
+    assert not (tmp_path / "CLAUDE.md").exists()
+
+
+def test_copy_records_failed_status_on_nonzero_pbcopy(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "spec-before-code")
+    fix = Fix(
+        id="spec-before-code",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=1, label="Copy /office-hours", payload="/office-hours"),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1
+        status = execute_action(conn, row, fix, confirm=_always_no)
+    assert status == "failed"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["exit_code"] == 1
 
 
 def test_dry_run_copy_does_not_touch_clipboard(tmp_path, monkeypatch):

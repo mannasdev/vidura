@@ -66,6 +66,9 @@ def main(argv: list[str] | None = None) -> int:
         except PermissionError as e:
             print(str(e), file=sys.stderr)
             return 1
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 1
 
         if status == "dry-run":
             print("dry-run: no side effects, nothing recorded.")
@@ -75,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
 
         audit_id = executions_for(conn, row["id"])[-1]["id"]
         print(f"vidura-do: {status} (audit id {audit_id})")
-        return 0 if status == "done" else 1
+        return 0 if status == "done" else 3
     finally:
         conn.close()
 

@@ -52,9 +52,11 @@ def execute_action(
     action never even reached the point of asking).
     """
     action = fix.action
+    if action is None:
+        raise ValueError("vidura: fix has no executable action")
     suggestion_id = suggestion_row["id"]
 
-    if action.tier >= 2 and not execution_enabled():
+    if action.tier >= 2 and not dry_run and not execution_enabled():
         raise PermissionError(
             "vidura: execution disabled (VIDURA_EXECUTION=off) — "
             "tiers 2+ (WRITE/RUN) are blocked; unset VIDURA_EXECUTION to re-enable"
@@ -74,21 +76,28 @@ def _execute_copy(conn, suggestion_id: int, fix: Fix, *, dry_run: bool) -> str:
     if dry_run:
         print(f"[dry-run] would copy to clipboard:\n{action.payload}")
         return "dry-run"
-    subprocess.run(["pbcopy"], input=action.payload.encode(), check=False)
+    result = subprocess.run(["pbcopy"], input=action.payload.encode(), check=False)
+    status = "done" if result.returncode == 0 else "failed"
     record_execution(
         conn,
         suggestion_id=suggestion_id,
         fix_id=fix.id,
         tier=action.tier,
         detail=f"copied to clipboard: {action.payload!r}",
-        status="done",
+        status=status,
+        exit_code=result.returncode,
     )
-    return "done"
+    return status
 
 
 def _execute_write(conn, suggestion_id: int, fix: Fix, *, confirm, dry_run: bool) -> str:
     action = fix.action
-    target = Path.cwd() / action.target_file
+    cwd = Path.cwd().resolve()
+    target = (cwd / action.target_file).resolve()
+    if not target.is_relative_to(cwd):
+        raise ValueError(
+            f"vidura: refusing to write outside the working directory: {action.target_file!r}"
+        )
     if dry_run:
         print(f"[dry-run] would append to {target}:\n{action.payload}")
         return "dry-run"
@@ -143,18 +152,29 @@ def _execute_run(conn, suggestion_id: int, fix: Fix, *, confirm, dry_run: bool) 
     result = subprocess.run(
         argv, shell=False, timeout=RUN_TIMEOUT_SECONDS, capture_output=True
     )
-    stdout = result.stdout.decode() if isinstance(result.stdout, bytes) else (result.stdout or "")
-    stderr = result.stderr.decode() if isinstance(result.stderr, bytes) else (result.stderr or "")
-    output_head = (stdout + stderr)[:OUTPUT_HEAD_CHARS]
     status = "done" if result.returncode == 0 else "failed"
-    record_execution(
-        conn,
-        suggestion_id=suggestion_id,
-        fix_id=fix.id,
-        tier=action.tier,
-        detail=f"ran: {' '.join(argv)}",
-        status=status,
-        exit_code=result.returncode,
-        output_head=output_head,
-    )
+    output_head = None
+    try:
+        stdout = (
+            result.stdout.decode(errors="replace")
+            if isinstance(result.stdout, bytes)
+            else (result.stdout or "")
+        )
+        stderr = (
+            result.stderr.decode(errors="replace")
+            if isinstance(result.stderr, bytes)
+            else (result.stderr or "")
+        )
+        output_head = (stdout + stderr)[:OUTPUT_HEAD_CHARS]
+    finally:
+        record_execution(
+            conn,
+            suggestion_id=suggestion_id,
+            fix_id=fix.id,
+            tier=action.tier,
+            detail=f"ran: {' '.join(argv)}",
+            status=status,
+            exit_code=result.returncode,
+            output_head=output_head,
+        )
     return status

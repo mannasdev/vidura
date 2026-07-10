@@ -70,3 +70,17 @@ def test_unknown_id_exits_nonzero(tmp_path, monkeypatch, capsys):
     rc = main(["999"])
     assert rc == 1
     assert "no suggestion with id" in capsys.readouterr().err
+
+
+def test_failed_execution_exits_three(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _seed(tmp_path, monkeypatch, fix_id="github-context-by-paste", status="accepted")
+    with patch("vidura.do_cli._tty_confirm", return_value=True):
+        with patch("vidura.executor.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = b""
+            mock_run.return_value.stderr = b"brew: command not found\n"
+            rc = main(["1"])
+    assert rc == 3
+    out = capsys.readouterr().out
+    assert "failed" in out.lower()
