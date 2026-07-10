@@ -81,6 +81,16 @@ def test_search_sessions_groups_by_best_score(tmp_path):
     conn.close()
 
 
+def test_remember_chunks_idempotent_per_session(tmp_path):
+    conn = _db(tmp_path)
+    remember_chunks(conn, "/s/a.jsonl", ["[user] first version"])
+    remember_chunks(conn, "/s/a.jsonl", ["[user] first version", "[user] second chunk"])
+    rows = conn.execute("SELECT COUNT(*) FROM chunks WHERE session_path='/s/a.jsonl'").fetchone()[0]
+    assert rows == 2  # replaced, not appended
+    assert len(search_chunks(conn, ["first version"])) == 1
+    conn.close()
+
+
 def test_get_context_respects_token_budget(tmp_path):
     conn = _db(tmp_path)
     remember_chunks(conn, "/s/a.jsonl", ["[user] timeout " + "x" * 8000])

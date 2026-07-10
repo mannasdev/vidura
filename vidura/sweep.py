@@ -174,6 +174,12 @@ def run_sweep(
                 record_suggestion(conn, suggestion)
                 stats["suggestions_recorded"] += 1
             for w in batch:
+                # Order matters for resume correctness: remember before
+                # mark. remember_chunks is idempotent per session_path
+                # (delete-then-insert), so a re-run after a crash between
+                # these two writes just re-remembers safely. The reverse
+                # order could mark a session reflected whose chunks were
+                # never stored, and resume would then skip it forever.
                 remember_chunks(conn, str(w.path), w.chunks)
                 mark_reflected(
                     conn,

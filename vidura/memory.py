@@ -33,6 +33,11 @@ def remember_chunks(
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     turns = user_turns_per_chunk or [0] * len(chunks)
+    # Delete-then-insert in one transaction so a resumed sweep re-running
+    # remember_chunks for a session already stored is idempotent (no
+    # unique constraint on session_path means a naive append would
+    # duplicate chunks). The chunks_ad trigger cleans the FTS index too.
+    conn.execute("DELETE FROM chunks WHERE session_path = ?", (session_path,))
     conn.executemany(
         "INSERT INTO chunks(session_path, text, user_turns, created_at) VALUES (?, ?, ?, ?)",
         [(session_path, text, t, now) for text, t in zip(chunks, turns)],
