@@ -1,10 +1,10 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from vidura.contract import CONTRACT_VERSION, ReflectRequest
-from vidura.reflect import ReflectorError, build_prompt, parse_suggestions, reflect
+from vidura.reflect import ReflectorError, build_prompt, call_ollama, parse_suggestions, reflect
 
 
 def _request(chunks=None, fix_index=None):
@@ -76,3 +76,52 @@ def test_reflect_raises_reflector_error_when_ollama_call_fails():
     with patch("vidura.reflect.call_ollama", side_effect=ReflectorError("unreachable")):
         with pytest.raises(ReflectorError):
             reflect(_request())
+
+
+def _mock_urlopen(body_bytes):
+    cm = MagicMock()
+    cm.__enter__.return_value.read.return_value = body_bytes
+    cm.__exit__.return_value = False
+    return cm
+
+
+def test_call_ollama_non_json_body_raises_reflector_error():
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen(b"<html>502 Bad Gateway</html>")):
+        with pytest.raises(ReflectorError):
+            call_ollama("prompt")
+
+
+def test_call_ollama_non_dict_body_raises_reflector_error():
+    with patch("urllib.request.urlopen", return_value=_mock_urlopen(json.dumps(["a", "b"]).encode("utf-8"))):
+        with pytest.raises(ReflectorError):
+            call_ollama("prompt")
+
+
+def test_parse_suggestions_skips_non_dict_items():
+    raw = json.dumps([
+        "just a string",
+        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": ["quote"], "blunt_summary": "ok"},
+    ])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 1
+    assert suggestions[0].fix_id == "judge-executor-split"
+
+
+def test_parse_suggestions_skips_non_numeric_confidence():
+    raw = json.dumps([
+        {"fix_id": "judge-executor-split", "confidence": "high", "evidence": ["quote"], "blunt_summary": "bad"},
+        {"fix_id": None, "confidence": None, "evidence": ["quote"], "blunt_summary": "bad2"},
+        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": ["quote"], "blunt_summary": "good"},
+    ])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 1
+    assert suggestions[0].blunt_summary == "good"
+
+
+def test_parse_suggestions_handles_markdown_fenced_json():
+    raw = "```json\n" + json.dumps([
+        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": ["quote"], "blunt_summary": "fenced"}
+    ]) + "\n```"
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 1
+    assert suggestions[0].blunt_summary == "fenced"

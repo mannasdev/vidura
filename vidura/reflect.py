@@ -65,17 +65,34 @@ def call_ollama(
             payload = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError) as exc:
         raise ReflectorError(f"ollama unreachable or timed out: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ReflectorError(f"ollama returned a non-JSON body: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ReflectorError("ollama returned a JSON body that was not an object")
     response_text = payload.get("response")
     if not response_text:
         raise ReflectorError("ollama returned no response text")
     return response_text
 
 
+def _strip_markdown_fence(text: str) -> str:
+    """Strip a leading/trailing markdown code fence (```json ... ``` or
+    ``` ... ```) if the text is wrapped in one — the single most common
+    local-LLM output quirk. A simple, explicit strip, not a general
+    extractor."""
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        stripped = stripped[3:-3].strip()
+        if stripped.startswith("json"):
+            stripped = stripped[4:].strip()
+    return stripped
+
+
 def parse_suggestions(
     raw_response: str, confidence_floor_by_fix: dict[str, float]
 ) -> list[Suggestion]:
     try:
-        parsed: Any = json.loads(raw_response)
+        parsed: Any = json.loads(_strip_markdown_fence(raw_response))
     except json.JSONDecodeError as exc:
         raise ReflectorError(f"reflector output was not valid JSON: {exc}") from exc
     if not isinstance(parsed, list):
@@ -83,17 +100,28 @@ def parse_suggestions(
 
     suggestions: list[Suggestion] = []
     for item in parsed:
+        if not isinstance(item, dict):
+            continue
         fix_id = item.get("fix_id")
-        confidence = float(item.get("confidence", 0.0))
+        try:
+            confidence = float(item.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            continue
         floor = confidence_floor_by_fix.get(fix_id, 0.7) if fix_id else 0.8
         if confidence < floor:
             continue
+        evidence = item.get("evidence", [])
+        if not isinstance(evidence, list):
+            evidence = []
+        blunt_summary = item.get("blunt_summary", "")
+        if not isinstance(blunt_summary, str):
+            blunt_summary = str(blunt_summary)
         suggestions.append(
             Suggestion(
                 fix_id=fix_id or "novel",
                 confidence=confidence,
-                evidence=item.get("evidence", []),
-                blunt_summary=item.get("blunt_summary", ""),
+                evidence=evidence,
+                blunt_summary=blunt_summary,
                 novel=fix_id is None,
             )
         )
