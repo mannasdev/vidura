@@ -125,3 +125,25 @@ def test_parse_suggestions_handles_markdown_fenced_json():
     suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
     assert len(suggestions) == 1
     assert suggestions[0].blunt_summary == "fenced"
+
+
+def test_parse_suggestions_unwraps_suggestions_object():
+    raw = json.dumps({
+        "suggestions": [
+            {"fix_id": "judge-executor-split", "confidence": 0.85, "evidence": ["quote"], "blunt_summary": "split it"}
+        ]
+    })
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 1
+    assert suggestions[0].fix_id == "judge-executor-split"
+
+
+def test_parse_suggestions_object_without_suggestions_key_raises():
+    with pytest.raises(ReflectorError):
+        parse_suggestions(json.dumps({"not": "an array"}), {})
+
+
+def test_build_prompt_ends_with_closing_instruction():
+    prompt = build_prompt(_request())
+    assert prompt.rstrip().endswith('empty array if nothing clears the bar.')
+    assert prompt.index("<recent_sessions>") < prompt.index("Remember: you are Vidura")
