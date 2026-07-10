@@ -17,6 +17,7 @@ vidura-report = "vidura.report:main"
 vidura-sweep = "vidura.sweep:main"
 vidura-ledger = "vidura.ledger_cli:main"
 vidura-do = "vidura.do_cli:main"
+vidura-state = "vidura.state_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
