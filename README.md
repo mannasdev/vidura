@@ -85,6 +85,24 @@ weeks, not just within one report. And accepted suggestions are tracked
 for follow-through — if the targeted friction actually drops, the ledger
 upgrades them to `adopted`; if two weeks pass unchanged, `lapsed`.
 
+## Acting on suggestions
+
+Some fixes carry an executable action — Vidura can do the remedy, not
+just describe it:
+
+```bash
+vidura-ledger accept 6      # decide first — execution is accept-gated
+vidura-do 6 --dry-run       # see exactly what would happen
+vidura-do 6                 # do it (per-action confirmation, full audit)
+```
+
+Actions are risk-tiered: COPY (clipboard, inert), WRITE (append a
+declared block to a file you own, full preview), RUN (one fixed command,
+shown verbatim, `shell=False`, 300s timeout). Nothing ever runs without
+your explicit per-action confirmation; every attempt — including
+declines — is audited in the database. `VIDURA_EXECUTION=off` disables
+WRITE/RUN entirely.
+
 State lives in `~/Library/Application Support/Vidura/vidura.db`
 (override with `VIDURA_DB_PATH`; delete the folder to erase everything).
 Sessions already reflected are skipped on the next run, so the first
