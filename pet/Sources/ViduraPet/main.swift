@@ -21,7 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let state = StateModel()
     private var moodCancellable: AnyCancellable?
 
-    private static let panelSize = NSSize(width: 400, height: 480)
+    private static let panelWidth: CGFloat = 400
+    private static let panelMinHeight: CGFloat = 120
+    private static let panelMaxHeight: CGFloat = 640
+    private var contentCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -97,34 +100,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel() {
-        guard let button = statusItem?.button, let buttonWindow = button.window else { return }
+        guard statusItem?.button != nil else { return }
         state.refresh()
-
-        // The button's rect in SCREEN coordinates — measured, not
-        // inferred by any popover machinery. X centers the panel under
-        // the icon; Y hangs it just below the menu bar. Both clamped to
-        // the button's own screen so a crowded bar or edge icon can't
-        // push the panel off-screen.
-        let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-        let size = Self.panelSize
-        let screenFrame = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-
-        var x = buttonRect.midX - size.width / 2
-        x = min(max(x, screenFrame.minX + 8), screenFrame.maxX - size.width - 8)
-        let yTop = buttonRect.minY - 6
-        let y = max(yTop - size.height, screenFrame.minY + 8)
 
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        positionPanel(panel)
         panel.makeKeyAndOrderFront(nil)
         installOutsideClickMonitor()
+
+        // The panel hugs its content: when entries/mood change while it
+        // is open (accept, dismiss, poll), re-measure and re-anchor so
+        // there is never a fixed-height void around the content.
+        contentCancellable = state.$entries
+            .combineLatest(state.$mood)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in
+                guard let self, let panel = self.panel, panel.isVisible else { return }
+                self.positionPanel(panel)
+            }
+    }
+
+    /// Frame math we own end to end: X centers the panel under the
+    /// status icon, the TOP edge hangs just below the menu bar, and the
+    /// HEIGHT is the SwiftUI content's own fitting size (clamped) — the
+    /// panel is exactly as tall as what's inside it.
+    private func positionPanel(_ panel: PetPanel) {
+        guard let button = statusItem?.button, let buttonWindow = button.window else { return }
+        let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+        let screenFrame = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        var height = Self.panelMinHeight
+        if let contentView = panel.contentViewController?.view {
+            contentView.layoutSubtreeIfNeeded()
+            height = min(max(contentView.fittingSize.height, Self.panelMinHeight), Self.panelMaxHeight)
+        }
+
+        var x = buttonRect.midX - Self.panelWidth / 2
+        x = min(max(x, screenFrame.minX + 8), screenFrame.maxX - Self.panelWidth - 8)
+        let yTop = buttonRect.minY - 6
+        let y = max(yTop - height, screenFrame.minY + 8)
+
+        panel.setFrame(NSRect(x: x, y: y, width: Self.panelWidth, height: height), display: true)
     }
 
     private func hidePanel() {
         panel?.orderOut(nil)
         removeOutsideClickMonitor()
+        contentCancellable?.cancel()
+        contentCancellable = nil
     }
 
     /// Transient behavior (click anywhere outside → close), which
@@ -147,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makePanel() -> PetPanel {
         let panel = PetPanel(
-            contentRect: NSRect(origin: .zero, size: Self.panelSize),
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelMinHeight),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -160,8 +185,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
+        // Width fixed, height free — the panel takes its height from
+        // this view's fitting size (positionPanel), so the content is
+        // never floating in a fixed-height void.
         let content = CardView(state: state)
-            .frame(width: Self.panelSize.width, height: Self.panelSize.height)
+            .frame(width: Self.panelWidth)
+            .fixedSize(horizontal: false, vertical: true)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
