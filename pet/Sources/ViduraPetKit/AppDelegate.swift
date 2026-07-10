@@ -71,22 +71,39 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateBadge(for moodRaw: String) {
         guard let button = statusItem?.button else { return }
         let isStirring = moodRaw == Mood.stirring.rawValue
-        button.image = Self.menuBarImage(withBadge: isStirring)
+        // The image must ALWAYS stay template (macOS retints it for
+        // light/dark menu bars). The amber badge therefore cannot be
+        // baked into the image — compositing a colored dot flattens the
+        // whole image to non-template, which rendered the silhouette as
+        // literal black pixels on dark menu bars (owner-reported bug).
+        // Instead the dot is a colored attributed-string title beside
+        // the template image: both properties survive.
+        button.image = Self.menuBarImage(withBadge: false)
+        if isStirring {
+            button.attributedTitle = NSAttributedString(
+                string: "\u{25CF}",
+                attributes: [
+                    .foregroundColor: NSColor(srgbRed: 0xB4 / 255, green: 0x53 / 255, blue: 0x09 / 255, alpha: 1),
+                    .font: NSFont.systemFont(ofSize: 7),
+                    .baselineOffset: 4,
+                ]
+            )
+            button.imagePosition = .imageLeading
+        } else {
+            button.attributedTitle = NSAttributedString(string: "")
+            button.imagePosition = .imageOnly
+        }
         button.setAccessibilityLabel(isStirring ? "Vidura — stirring" : "Vidura")
     }
 
     /// The menu-bar mark glyph (spec §4): a small pixel-style rounded
     /// head silhouette with two rectangular eyes, matching the
     /// character's face in miniature, drawn in template mode so AppKit
-    /// tints it correctly for light/dark menu bars. `withBadge` adds the
-    /// spec's 5×5 accent-colored dot at the top-right corner — the
-    /// menu-bar-level equivalent of the in-panel STIRRING mood, and the
-    /// only state this glyph ever varies by. Static image swap only, no
-    /// animation.
-    ///
-    /// The badge dot is drawn as a fixed non-template accent color
-    /// rather than participating in template tinting — the spec calls
-    /// it out as a colored (not monochrome) indicator in both themes.
+    /// tints it correctly for light/dark menu bars. ALWAYS template —
+    /// the stirring badge lives in the button's attributed title (see
+    /// updateBadge), never composited into this image: compositing
+    /// flattens template mode and the silhouette renders black on dark
+    /// menu bars. Static image, no animation.
     static func menuBarImage(withBadge: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
@@ -119,24 +136,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
         image.isTemplate = true
-
-        guard withBadge else {
-            image.accessibilityDescription = "Vidura"
-            return image
-        }
-
-        // Compose the accent badge dot on top as a second, non-template
-        // layer so it keeps its color instead of being flattened to the
-        // template tint.
-        let composed = NSImage(size: size)
-        composed.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: size))
-        NSColor(srgbRed: 0xB4 / 255, green: 0x53 / 255, blue: 0x09 / 255, alpha: 1).setFill()
-        NSBezierPath(ovalIn: NSRect(x: size.width - 6, y: size.height - 6, width: 5, height: 5)).fill()
-        composed.unlockFocus()
-        composed.isTemplate = false
-        composed.accessibilityDescription = "Vidura — stirring"
-        return composed
+        image.accessibilityDescription = "Vidura"
+        return image
     }
 
     @objc private func togglePanel(_ sender: AnyObject?) {
