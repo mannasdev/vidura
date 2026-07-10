@@ -253,3 +253,79 @@ def test_fts_available_true_on_modern_sqlite(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     assert fts_available(conn) is True
     conn.close()
+
+
+from vidura.store import executions_for, record_execution
+
+
+def test_fresh_db_migrates_straight_to_v3(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "executions" in tables
+    conn.close()
+
+
+def test_v2_db_migrates_in_place_to_v3(tmp_path):
+    p = tmp_path / "db.sqlite"
+    conn = open_db(p)
+    conn.execute("PRAGMA user_version = 2")
+    conn.execute("DROP TABLE executions")
+    conn.commit()
+    conn.close()
+    conn = open_db(p)  # reopen: must migrate 2 -> 3 without touching v2 tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "executions" in tables
+    assert "chunks" in tables  # v2 migration didn't re-run/duplicate
+    conn.close()
+
+
+def test_record_execution_and_fetch_roundtrip(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    exec_id = record_execution(
+        conn,
+        suggestion_id=1,
+        fix_id="github-context-by-paste",
+        tier=3,
+        detail="brew install gh",
+        status="done",
+        exit_code=0,
+        output_head="Installing gh...",
+    )
+    rows = executions_for(conn, 1)
+    assert len(rows) == 1
+    assert rows[0]["id"] == exec_id
+    assert rows[0]["fix_id"] == "github-context-by-paste"
+    assert rows[0]["tier"] == 3
+    assert rows[0]["status"] == "done"
+    assert rows[0]["exit_code"] == 0
+    assert rows[0]["started_at"]
+    assert rows[0]["finished_at"]
+    conn.close()
+
+
+def test_record_execution_declined_status(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_execution(
+        conn,
+        suggestion_id=2,
+        fix_id="missing-claude-md",
+        tier=2,
+        detail="append CLAUDE.md starter block",
+        status="declined",
+    )
+    rows = executions_for(conn, 2)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "declined"
+    assert rows[0]["exit_code"] is None
+    conn.close()
+
+
+def test_executions_for_scoped_to_suggestion(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_execution(conn, 1, "fix-a", 1, "detail", "done")
+    record_execution(conn, 2, "fix-b", 1, "detail", "done")
+    assert len(executions_for(conn, 1)) == 1
+    assert len(executions_for(conn, 2)) == 1
+    conn.close()

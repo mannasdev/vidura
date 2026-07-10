@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_V2 = """
 ALTER TABLE sessions ADD COLUMN streaks INTEGER;
@@ -59,6 +59,21 @@ CREATE TABLE IF NOT EXISTS chunks (
     text TEXT NOT NULL,
     user_turns INTEGER NOT NULL,
     created_at TEXT NOT NULL
+);
+"""
+
+_SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS executions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    suggestion_id INTEGER NOT NULL,
+    fix_id TEXT NOT NULL,
+    tier INTEGER NOT NULL,
+    detail TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    exit_code INTEGER,
+    output_head TEXT,
+    status TEXT NOT NULL
 );
 """
 
@@ -94,7 +109,7 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     conn.commit()
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version < SCHEMA_VERSION:
+    if version < 2:
         conn.executescript(_SCHEMA_V2)
         try:
             conn.executescript(_SCHEMA_V2_FTS)
@@ -102,6 +117,11 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
             # custom Python build without FTS5 — memory.search falls back
             # to LIKE; warn once, never crash (silence principle).
             print("vidura: sqlite lacks FTS5; memory search degrades to LIKE", file=sys.stderr)
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        version = 2
+    if version < 3:
+        conn.executescript(_SCHEMA_V3)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     return conn
@@ -253,6 +273,38 @@ def set_status(conn: sqlite3.Connection, suggestion_id: int, status: str) -> boo
 
 
 LEDGER_SUMMARY_NOVEL_CAP = 10
+
+
+def record_execution(
+    conn: sqlite3.Connection,
+    suggestion_id: int,
+    fix_id: str,
+    tier: int,
+    detail: str,
+    status: str,
+    exit_code: int | None = None,
+    output_head: str | None = None,
+) -> int:
+    """Audit-log one execution attempt (design doc Decision 3.3: everything
+    is audited, including declines — a declined action is a signal). Both
+    started_at and finished_at are stamped to now: callers record after the
+    action has already run (or been declined), never mid-flight."""
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO executions(suggestion_id, fix_id, tier, detail, "
+        "started_at, finished_at, exit_code, output_head, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (suggestion_id, fix_id, tier, detail, now, now, exit_code, output_head, status),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def executions_for(conn: sqlite3.Connection, suggestion_id: int) -> list:
+    return conn.execute(
+        "SELECT * FROM executions WHERE suggestion_id = ? ORDER BY id",
+        (suggestion_id,),
+    ).fetchall()
 
 
 def ledger_summary_for_prompt(conn: sqlite3.Connection) -> list[dict]:
