@@ -35,6 +35,28 @@ vidura-report
 pytest
 ```
 
+## Sweep & ledger
+
+`vidura-report` is one reflection pass over a budget-sized slice of your
+logs. `vidura-sweep` is the full-coverage version: it packs every
+friction session into batches, reflects each one, and merges results
+into a persistent ledger.
+
+```bash
+vidura-sweep              # top 20 densest batches (the default)
+vidura-sweep --full       # every batch — the expensive first run
+vidura-ledger             # list suggestions (pending/accepted/dismissed)
+vidura-ledger accept 3    # mark suggestion 3 accepted
+vidura-ledger dismiss 3   # dismissed suggestions are NEVER re-suggested
+```
+
+State lives in `~/Library/Application Support/Vidura/vidura.db`
+(override with `VIDURA_DB_PATH`; delete the folder to erase everything).
+Sessions already reflected are skipped on the next run, so the first
+sweep is the expensive one and incremental runs cost pennies. An
+interrupted sweep (session limit, ctrl-C) resumes where it left off —
+sessions are only marked seen when their batch succeeds.
+
 ## M0 evaluation (the actual gate)
 
 This is not a unit test — it's the design doc's kill criterion. Run:
