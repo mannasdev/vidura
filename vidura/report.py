@@ -120,6 +120,16 @@ def print_report(request: ReflectRequest, backend: str = "auto") -> int:
         print(f"vidura report: degrading to silence: {exc}", file=sys.stderr)
         print("No suggestions this run (reflector unavailable).")
         return 0
+    except Exception as exc:
+        # Design doc Premise #4: judgment-unavailable must never crash the
+        # tool. ReflectorError covers the reflector's own known failure
+        # modes, but exceptions can still escape it (e.g. a
+        # ConnectionResetError from call_ollama's networking, or a
+        # KeyError from a malformed fix_index entry in reflect()) — any of
+        # those must degrade to silence too, not propagate.
+        print(f"vidura report: degrading to silence (unexpected error): {exc}", file=sys.stderr)
+        print("No suggestions this run (reflector unavailable).")
+        return 0
 
     if not response.suggestions:
         print("No suggestions this run — nothing cleared the confidence bar. Silence is correct.")

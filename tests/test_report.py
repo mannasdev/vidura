@@ -105,6 +105,22 @@ def test_print_report_degrades_to_silence_on_reflector_error(capsys):
     assert "No suggestions" in capsys.readouterr().out
 
 
+def test_print_report_degrades_to_silence_on_any_exception(capsys):
+    from vidura.contract import ReflectRequest
+    request = ReflectRequest(
+        contract_version=CONTRACT_VERSION,
+        signals={"sessions_scanned": 1},
+        chunks=[],
+        fix_index=[],
+        ledger=[],
+    )
+    with patch("vidura.report.reflect", side_effect=KeyError("id")):
+        exit_code = print_report(request)
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "No suggestions" in out
+
+
 def test_print_report_prints_suggestion_details(capsys):
     from vidura.contract import ReflectRequest
     request = ReflectRequest(

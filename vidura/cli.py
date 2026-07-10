@@ -8,7 +8,9 @@ judgment-unavailable cases, so they must NOT degrade to silence.
 
 Every reflector failure (Ollama unreachable, timeout, malformed model
 output) degrades to silence per design doc Premise #4: empty
-suggestions list, exit 0.
+suggestions list, exit 0. This is a broad `except Exception`, not just
+ReflectorError — network/parsing exceptions can escape reflect()'s own
+net and must still degrade rather than crash the caller.
 """
 
 import json
@@ -57,6 +59,15 @@ def main(argv: list[str] | None = None) -> int:
         response = reflect(request)
     except ReflectorError as exc:
         print(f"vidura-reflect: degrading to silence: {exc}", file=sys.stderr)
+        response = ReflectResponse(contract_version=CONTRACT_VERSION, suggestions=[])
+    except Exception as exc:
+        # Design doc Premise #4: judgment-unavailable must never crash the
+        # tool. ReflectorError covers the reflector's own known failure
+        # modes, but exceptions can still escape it (e.g. a
+        # ConnectionResetError from call_ollama's networking, or a
+        # KeyError from a malformed fix_index entry in reflect()) — any of
+        # those must degrade to silence too, not propagate.
+        print(f"vidura-reflect: degrading to silence (unexpected error): {exc}", file=sys.stderr)
         response = ReflectResponse(contract_version=CONTRACT_VERSION, suggestions=[])
 
     print(json.dumps(response.to_json_dict()))

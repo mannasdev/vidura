@@ -61,3 +61,12 @@ def test_reflector_error_degrades_to_silence(monkeypatch, capsys):
     assert exit_code == 0
     out = json.loads(capsys.readouterr().out)
     assert out["suggestions"] == []
+
+
+def test_any_exception_degrades_to_silence(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(_valid_payload())))
+    with patch("vidura.cli.reflect", side_effect=KeyError("id")):
+        exit_code = main()
+    assert exit_code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["suggestions"] == []
