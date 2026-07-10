@@ -236,7 +236,7 @@ def test_print_ledger_report_strips_control_chars(tmp_path, capsys):
 
 def test_main_no_pending_work(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
-    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days: [])
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
     exit_code = main([])
     assert exit_code == 0
     assert "Nothing new to sweep" in capsys.readouterr().out
@@ -245,7 +245,7 @@ def test_main_no_pending_work(tmp_path, monkeypatch, capsys):
 def test_main_runs_and_prints_report(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
     work = [_work(tmp_path, "a.jsonl", streaks=3)]
-    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days: work)
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: work)
     with patch("vidura.sweep.reflect", return_value=_response()):
         exit_code = main([])
     assert exit_code == 0
@@ -261,7 +261,7 @@ def test_main_batches_flag_caps(tmp_path, monkeypatch):
     # use --batches 0 is invalid; test --batches 1 with oversized sessions
     for w in work:
         w.chunks = ["x" * 40000]
-    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days: work)
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: work)
     with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
         main(["--batches", "1"])
     assert mock_reflect.call_count == 1
