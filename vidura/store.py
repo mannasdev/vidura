@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 """
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_V2 = """
 ALTER TABLE sessions ADD COLUMN streaks INTEGER;
@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS executions (
     output_head TEXT,
     status TEXT NOT NULL
 );
+"""
+
+_SCHEMA_V4 = """
+ALTER TABLE suggestions ADD COLUMN celebrated INTEGER NOT NULL DEFAULT 0;
 """
 
 _SCHEMA_V2_FTS = """
@@ -122,6 +126,13 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
         version = 2
     if version < 3:
         conn.executescript(_SCHEMA_V3)
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        version = 3
+    if version < 4:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
+        if "celebrated" not in cols:
+            conn.executescript(_SCHEMA_V4)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     return conn
@@ -267,6 +278,18 @@ def set_status(conn: sqlite3.Connection, suggestion_id: int, status: str) -> boo
     cur = conn.execute(
         "UPDATE suggestions SET status = ?, updated_at = ? WHERE id = ?",
         (status, _now(), suggestion_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def mark_celebrated(conn: sqlite3.Connection, suggestion_id: int) -> bool:
+    """Flip celebrated=1 for a suggestion (design doc: PROUD fires only
+    while celebrated=0). Called by the pet after it has played the
+    celebration animation once — idempotent, no-op on repeat calls."""
+    cur = conn.execute(
+        "UPDATE suggestions SET celebrated = 1 WHERE id = ?",
+        (suggestion_id,),
     )
     conn.commit()
     return cur.rowcount > 0

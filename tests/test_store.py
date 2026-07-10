@@ -273,8 +273,8 @@ def test_v2_db_migrates_in_place_to_v3(tmp_path):
     conn.execute("DROP TABLE executions")
     conn.commit()
     conn.close()
-    conn = open_db(p)  # reopen: must migrate 2 -> 3 without touching v2 tables
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    conn = open_db(p)  # reopen: must migrate 2 -> latest without touching v2 tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "executions" in tables
     assert "chunks" in tables  # v2 migration didn't re-run/duplicate
@@ -319,6 +319,57 @@ def test_record_execution_declined_status(tmp_path):
     assert len(rows) == 1
     assert rows[0]["status"] == "declined"
     assert rows[0]["exit_code"] is None
+    conn.close()
+
+
+from vidura.store import mark_celebrated
+
+
+def test_fresh_db_migrates_straight_to_v4(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert SCHEMA_VERSION == 4
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
+    assert "celebrated" in cols
+    conn.close()
+
+
+def test_v3_db_migrates_in_place_to_v4(tmp_path):
+    p = tmp_path / "db.sqlite"
+    conn = open_db(p)
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+    conn = open_db(p)  # reopen: must migrate 3 -> 4 without touching v3 tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
+    assert "celebrated" in cols
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "executions" in tables  # v3 migration didn't re-run/duplicate
+    conn.close()
+
+
+def test_new_suggestions_default_celebrated_zero(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg())
+    row = ledger_entries(conn)[0]
+    assert row["celebrated"] == 0
+    conn.close()
+
+
+def test_mark_celebrated_roundtrip(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg())
+    row_id = ledger_entries(conn)[0]["id"]
+    assert mark_celebrated(conn, row_id) is True
+    row = conn.execute("SELECT celebrated FROM suggestions WHERE id = ?", (row_id,)).fetchone()
+    assert row["celebrated"] == 1
+    conn.close()
+
+
+def test_mark_celebrated_missing_id_returns_false(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    assert mark_celebrated(conn, 999) is False
     conn.close()
 
 
