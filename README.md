@@ -2,7 +2,8 @@
 
 A local, open-source counselor that reads your Claude Code session logs
 and tells you the truth about your friction patterns — rarely, bluntly,
-with evidence.
+with evidence. Headed toward a menu-bar companion that can act on its
+own advice, and a read-only memory API your other agents can draw on.
 
 > Published on PyPI as **`vidura-cli`** (the `vidura` package name belongs
 > to an unrelated agent orchestrator). The importable module and all
@@ -10,15 +11,38 @@ with evidence.
 
 ## Status
 
-Pre-M0. This is the reflector-only build: `vidura report` reads your last
-30 days of Claude Code logs, redacts secrets, extracts friction signals,
-and asks a local Ollama model whether anything clears the bar for a
-suggestion. No menubar app yet — that's M3.
+CLI-complete (M0 + sweep + ledger). `vidura-report` runs one reflection
+pass; `vidura-sweep` covers your whole 30-day window in batches and
+persists results to a ledger with accept/dismiss feedback. Everything is
+local except the reflection call itself, which by default goes through
+your own Claude Code CLI (`claude -p`, sandboxed: no tools, one turn).
+The transcripts being judged are conversations you already had with
+Claude, and they pass a redaction gate first regardless. Prefer fully
+local? `VIDURA_REFLECTOR_BACKEND=ollama` uses a local model instead —
+judgment quality is noticeably lower (we measured).
+
+No menubar app yet — that's M3 (see Roadmap).
 
 ## Requirements
 
 - Python 3.11+
-- [Ollama](https://ollama.com) running locally with a model pulled (default: `qwen2.5:14b`)
+- [Claude Code](https://claude.com/claude-code) installed and authenticated
+  (the default reflector backend) — **or** [Ollama](https://ollama.com)
+  with a model pulled for the pure-local fallback
+
+## Roadmap
+
+- **M1-full** — embed session chunks into a local vector index so the
+  reflector can retrieve "similar past friction" across your whole
+  history, not just the current window.
+- **M2** — background watcher: reflect automatically at session close.
+- **M3** — the menu-bar companion: a small pet that sleeps until it has
+  earned counsel, and can *act* on an accepted suggestion (install the
+  skill, apply the workflow) with explicit per-action confirmation.
+- **M4+** — a read-only MCP memory API over the same database, so your
+  other agents can start sessions with cross-session context
+  (`search_sessions`, `get_context`). Read-only is a hard rule: agents
+  consume memory, only Vidura writes it.
 
 ## Setup
 
