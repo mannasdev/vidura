@@ -75,3 +75,94 @@ def test_mark_reflected_upserts(tmp_path):
     count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     assert count == 1
     conn.close()
+
+
+from vidura.contract import Suggestion
+from vidura.store import (
+    blocked_fix_ids,
+    ledger_entries,
+    ledger_summary_for_prompt,
+    record_suggestion,
+    set_status,
+)
+
+
+def _sugg(fix_id="judge-executor-split", confidence=0.8, evidence=None, novel=False):
+    return Suggestion(
+        fix_id=fix_id,
+        confidence=confidence,
+        evidence=evidence or ["some quote"],
+        blunt_summary="a blunt sentence",
+        novel=novel,
+    )
+
+
+def test_record_and_list_pending(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg())
+    rows = ledger_entries(conn, status="pending")
+    assert len(rows) == 1
+    assert rows[0]["fix_id"] == "judge-executor-split"
+    conn.close()
+
+
+def test_pending_same_fix_id_merges_not_duplicates(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(confidence=0.7, evidence=["quote A"]))
+    record_suggestion(conn, _sugg(confidence=0.9, evidence=["quote B"]))
+    rows = ledger_entries(conn, status="pending")
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == 0.9  # max wins
+    assert rows[0]["occurrences"] == 2
+    import json as _json
+    evidence = _json.loads(rows[0]["evidence"])
+    assert "quote A" in evidence and "quote B" in evidence
+    conn.close()
+
+
+def test_evidence_pool_capped_at_five(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    for i in range(8):
+        record_suggestion(conn, _sugg(evidence=[f"quote {i}"]))
+    import json as _json
+    rows = ledger_entries(conn, status="pending")
+    assert len(_json.loads(rows[0]["evidence"])) == 5
+    conn.close()
+
+
+def test_dismissed_fix_id_never_recorded_again(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg())
+    row_id = ledger_entries(conn)[0]["id"]
+    assert set_status(conn, row_id, "dismissed") is True
+    record_suggestion(conn, _sugg(confidence=0.99))
+    assert ledger_entries(conn, status="pending") == []
+    assert "judge-executor-split" in blocked_fix_ids(conn)
+    conn.close()
+
+
+def test_novel_suggestions_never_merge_or_block(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(fix_id="novel", novel=True))
+    row_id = ledger_entries(conn)[0]["id"]
+    set_status(conn, row_id, "dismissed")
+    record_suggestion(conn, _sugg(fix_id="novel", novel=True))
+    assert len(ledger_entries(conn, status="pending")) == 1
+    assert "novel" not in blocked_fix_ids(conn)
+    conn.close()
+
+
+def test_set_status_unknown_id_returns_false(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    assert set_status(conn, 999, "accepted") is False
+    conn.close()
+
+
+def test_ledger_summary_for_prompt_shape(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg())
+    summary = ledger_summary_for_prompt(conn)
+    assert summary[0]["fix_id"] == "judge-executor-split"
+    assert summary[0]["status"] == "pending"
+    assert "evidence" not in summary[0]  # keep the prompt lean
+    conn.close()
