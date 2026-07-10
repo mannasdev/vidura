@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,6 +47,40 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 """
 
+SCHEMA_VERSION = 2
+
+_SCHEMA_V2 = """
+ALTER TABLE sessions ADD COLUMN streaks INTEGER;
+ALTER TABLE sessions ADD COLUMN errors INTEGER;
+ALTER TABLE sessions ADD COLUMN duration_seconds REAL;
+CREATE TABLE IF NOT EXISTS chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_path TEXT NOT NULL,
+    text TEXT NOT NULL,
+    user_turns INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
+_SCHEMA_V2_FTS = """
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    text, content='chunks', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+"""
+
+
+def fts_available(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunks_fts'"
+    ).fetchone()
+    return row is not None
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -58,6 +93,17 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     conn.commit()
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version < SCHEMA_VERSION:
+        conn.executescript(_SCHEMA_V2)
+        try:
+            conn.executescript(_SCHEMA_V2_FTS)
+        except sqlite3.OperationalError:
+            # custom Python build without FTS5 — memory.search falls back
+            # to LIKE; warn once, never crash (silence principle).
+            print("vidura: sqlite lacks FTS5; memory search degrades to LIKE", file=sys.stderr)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
     return conn
 
 
@@ -76,25 +122,38 @@ def needs_reflection(conn: sqlite3.Connection, path: Path) -> bool:
 
 
 def mark_reflected(
-    conn: sqlite3.Connection, path: Path, mtime: float | None = None, size: int | None = None
+    conn: sqlite3.Connection,
+    path: Path,
+    mtime: float | None = None,
+    size: int | None = None,
+    streaks: int | None = None,
+    errors: int | None = None,
+    duration_seconds: float | None = None,
 ) -> None:
     """Stamp path as reflected. mtime/size default to a fresh path.stat()
     when not provided, but callers that captured stats earlier (e.g. at
     sweep gather-time) should pass them explicitly — otherwise a session
     that grows during a minutes-long batch gets stamped with its NEW
-    (post-growth) stats and the appended tail is never reflected."""
+    (post-growth) stats and the appended tail is never reflected.
+
+    streaks/errors/duration_seconds are optional session-level signal
+    columns (M1 memory); callers that don't pass them leave the columns
+    NULL, and existing sweep.py callers keep working unmodified."""
     if mtime is None or size is None:
         st = path.stat()
         mtime = st.st_mtime if mtime is None else mtime
         size = st.st_size if size is None else size
     conn.execute(
-        """INSERT INTO sessions(path, mtime, size, reflected_at)
-           VALUES (?, ?, ?, ?)
+        """INSERT INTO sessions(path, mtime, size, reflected_at, streaks, errors, duration_seconds)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(path) DO UPDATE SET
              mtime = excluded.mtime,
              size = excluded.size,
-             reflected_at = excluded.reflected_at""",
-        (str(path), mtime, size, _now()),
+             reflected_at = excluded.reflected_at,
+             streaks = excluded.streaks,
+             errors = excluded.errors,
+             duration_seconds = excluded.duration_seconds""",
+        (str(path), mtime, size, _now(), streaks, errors, duration_seconds),
     )
     conn.commit()
 
@@ -118,7 +177,8 @@ def record_suggestion(conn: sqlite3.Connection, s) -> None:
     novel = s.novel or s.fix_id == "novel"
     if not novel:
         blocked = conn.execute(
-            "SELECT 1 FROM suggestions WHERE fix_id = ? AND status IN ('accepted', 'dismissed')",
+            "SELECT 1 FROM suggestions WHERE fix_id = ? "
+            "AND status IN ('accepted', 'dismissed', 'adopted', 'lapsed')",
             (s.fix_id,),
         ).fetchone()
         if blocked:
@@ -167,7 +227,7 @@ def record_suggestion(conn: sqlite3.Connection, s) -> None:
 def blocked_fix_ids(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute(
         "SELECT DISTINCT fix_id FROM suggestions "
-        "WHERE status IN ('accepted', 'dismissed') AND novel = 0"
+        "WHERE status IN ('accepted', 'dismissed', 'adopted', 'lapsed') AND novel = 0"
     ).fetchall()
     return {r["fix_id"] for r in rows}
 

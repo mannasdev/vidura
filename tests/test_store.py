@@ -207,3 +207,49 @@ def test_record_suggestion_forces_novel_semantics_for_fix_id_novel(tmp_path):
     assert len(ledger_entries(conn, status="pending")) == 1
     assert "novel" not in blocked_fix_ids(conn)
     conn.close()
+
+
+from vidura.store import SCHEMA_VERSION, fts_available
+
+
+def test_migration_sets_user_version_and_creates_chunks(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "chunks" in tables
+    conn.close()
+
+
+def test_migration_idempotent_on_existing_db(tmp_path):
+    p = tmp_path / "db.sqlite"
+    open_db(p).close()
+    conn = open_db(p)  # second open: ALTERs must not re-run
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    assert {"streaks", "errors", "duration_seconds"} <= cols
+    conn.close()
+
+
+def test_mark_reflected_stores_signal_columns(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    p = _session_file(tmp_path)
+    mark_reflected(conn, p, streaks=3, errors=1, duration_seconds=120.0)
+    row = conn.execute("SELECT streaks, errors, duration_seconds FROM sessions").fetchone()
+    assert (row["streaks"], row["errors"], row["duration_seconds"]) == (3, 1, 120.0)
+    conn.close()
+
+
+def test_adopted_and_lapsed_block_resuggestion(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg())
+    row_id = ledger_entries(conn)[0]["id"]
+    set_status(conn, row_id, "adopted")
+    record_suggestion(conn, _sugg(confidence=0.95))
+    assert ledger_entries(conn, status="pending") == []
+    assert "judge-executor-split" in blocked_fix_ids(conn)
+    conn.close()
+
+
+def test_fts_available_true_on_modern_sqlite(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    assert fts_available(conn) is True
+    conn.close()
