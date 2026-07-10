@@ -155,3 +155,16 @@ def test_build_report_request_prioritizes_friction_dense_chunks(tmp_path):
     # both sessions produce oversized chunks; budget forces a cut, and the
     # user-turn-dense chunk (session B's tail) must survive it
     assert any("not like that" in c for c in request.chunks)
+
+
+def test_find_recent_sessions_excludes_vidura_reflector_sessions(tmp_path):
+    project_dir = tmp_path / "-Users-x--vidura-reflector-cwd"
+    project_dir.mkdir()
+    (project_dir / "session.jsonl").write_text("{}", encoding="utf-8")
+    normal_dir = tmp_path / "normal-project"
+    normal_dir.mkdir()
+    normal = normal_dir / "session.jsonl"
+    normal.write_text("{}", encoding="utf-8")
+    sessions = find_recent_sessions(root=tmp_path, window_days=30)
+    assert normal in sessions
+    assert all("-vidura-reflector-cwd" not in str(p) for p in sessions)

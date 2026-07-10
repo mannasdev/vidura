@@ -8,14 +8,28 @@ per design doc Premise #4.
 """
 
 import json
+import shutil
+import subprocess
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from vidura.contract import CONTRACT_VERSION, ReflectRequest, ReflectResponse, Suggestion
 
 OLLAMA_DEFAULT_URL = "http://localhost:11434/api/generate"
 OLLAMA_DEFAULT_MODEL = "qwen2.5:14b"
+
+CLAUDE_CLI_DEFAULT_MODEL = "sonnet"
+CLAUDE_CLI_TIMEOUT_SECONDS = 180
+
+# claude -p writes its own session JSONL into ~/.claude/projects — and a
+# reflector session's transcript is stuffed with "[user]" markers, so it
+# would rank TOP of the friction-density sort on the next run (recursion
+# pollution). Running from this fixed cwd makes those logs land in a
+# project dir containing this token, which find_recent_sessions excludes.
+CLAUDE_CLI_CWD = Path.home() / ".vidura" / "reflector-cwd"
+CLAUDE_CLI_CWD_TOKEN = "-vidura-reflector-cwd"
 
 # The prompt regularly exceeds Ollama's 4096-token default context window;
 # without an explicit num_ctx the tail of the transcript silently evicts
@@ -100,6 +114,51 @@ def call_ollama(
     return response_text
 
 
+def call_claude_cli(
+    prompt: str,
+    model: str = CLAUDE_CLI_DEFAULT_MODEL,
+    timeout_seconds: int = CLAUDE_CLI_TIMEOUT_SECONDS,
+) -> str:
+    """Reflect via the user's existing Claude Code CLI (claude -p).
+
+    Vidura's target users are Claude Code users, so the CLI is already
+    installed and authenticated — zero new setup, frontier-class judgment.
+    Privacy note: the chunks are excerpts of conversations already held
+    with Claude, and they pass the redaction gate first regardless.
+    """
+    claude_bin = shutil.which("claude")
+    if claude_bin is None:
+        raise ReflectorError("claude CLI not found on PATH")
+    CLAUDE_CLI_CWD.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            [claude_bin, "-p", "--output-format", "json", "--model", model],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=CLAUDE_CLI_CWD,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReflectorError(f"claude CLI timed out after {timeout_seconds}s") from exc
+    except OSError as exc:
+        raise ReflectorError(f"claude CLI could not be executed: {exc}") from exc
+    if proc.returncode != 0:
+        raise ReflectorError(
+            f"claude CLI exited {proc.returncode}: {proc.stderr.strip()[:200]}"
+        )
+    try:
+        envelope = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise ReflectorError(f"claude CLI returned a non-JSON envelope: {exc}") from exc
+    if not isinstance(envelope, dict):
+        raise ReflectorError("claude CLI envelope was not a JSON object")
+    result = envelope.get("result")
+    if not result or not isinstance(result, str):
+        raise ReflectorError("claude CLI returned no result text")
+    return result
+
+
 def _strip_markdown_fence(text: str) -> str:
     """Strip a leading/trailing markdown code fence (```json ... ``` or
     ``` ... ```) if the text is wrapped in one — the single most common
@@ -157,13 +216,36 @@ def parse_suggestions(
     return suggestions
 
 
+def resolve_backend(backend: str = "auto") -> str:
+    """auto → claude if the CLI is installed (the target user's default),
+    else ollama (the pure-local fallback)."""
+    if backend == "auto":
+        return "claude" if shutil.which("claude") else "ollama"
+    if backend in ("claude", "ollama"):
+        return backend
+    raise ReflectorError(f"unknown reflector backend: {backend!r}")
+
+
 def reflect(
     request: ReflectRequest,
-    model: str = OLLAMA_DEFAULT_MODEL,
-    timeout_seconds: int = 60,
+    model: str | None = None,
+    timeout_seconds: int | None = None,
+    backend: str = "auto",
 ) -> ReflectResponse:
+    resolved = resolve_backend(backend)
     prompt = build_prompt(request)
-    raw_response = call_ollama(prompt, model=model, timeout_seconds=timeout_seconds)
+    if resolved == "claude":
+        raw_response = call_claude_cli(
+            prompt,
+            model=model or CLAUDE_CLI_DEFAULT_MODEL,
+            timeout_seconds=timeout_seconds or CLAUDE_CLI_TIMEOUT_SECONDS,
+        )
+    else:
+        raw_response = call_ollama(
+            prompt,
+            model=model or OLLAMA_DEFAULT_MODEL,
+            timeout_seconds=timeout_seconds or 60,
+        )
     confidence_floor_by_fix = {
         f["id"]: f["confidence_floor"] for f in request.fix_index
     }

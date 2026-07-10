@@ -67,7 +67,7 @@ def test_reflect_returns_suggestions_from_mocked_ollama():
         {"fix_id": "judge-executor-split", "confidence": 0.85, "evidence": ["you re-prompted 3x"], "blunt_summary": "split judge/executor"}
     ])
     with patch("vidura.reflect.call_ollama", return_value=mock_response):
-        response = reflect(_request())
+        response = reflect(_request(), backend="ollama")
     assert response.contract_version == CONTRACT_VERSION
     assert len(response.suggestions) == 1
 
@@ -75,7 +75,55 @@ def test_reflect_returns_suggestions_from_mocked_ollama():
 def test_reflect_raises_reflector_error_when_ollama_call_fails():
     with patch("vidura.reflect.call_ollama", side_effect=ReflectorError("unreachable")):
         with pytest.raises(ReflectorError):
-            reflect(_request())
+            reflect(_request(), backend="ollama")
+
+
+def test_reflect_routes_to_claude_backend():
+    mock_response = json.dumps({"suggestions": [
+        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": ["quote"], "blunt_summary": "split"}
+    ]})
+    with patch("vidura.reflect.call_claude_cli", return_value=mock_response) as mock_claude:
+        response = reflect(_request(), backend="claude")
+    mock_claude.assert_called_once()
+    assert len(response.suggestions) == 1
+
+
+def test_reflect_unknown_backend_raises():
+    with pytest.raises(ReflectorError):
+        reflect(_request(), backend="gpt9000")
+
+
+def test_resolve_backend_auto_prefers_claude_when_present():
+    from vidura.reflect import resolve_backend
+    with patch("vidura.reflect.shutil.which", return_value="/usr/local/bin/claude"):
+        assert resolve_backend("auto") == "claude"
+    with patch("vidura.reflect.shutil.which", return_value=None):
+        assert resolve_backend("auto") == "ollama"
+
+
+def test_call_claude_cli_missing_binary_raises():
+    from vidura.reflect import call_claude_cli
+    with patch("vidura.reflect.shutil.which", return_value=None):
+        with pytest.raises(ReflectorError):
+            call_claude_cli("prompt")
+
+
+def test_call_claude_cli_nonzero_exit_raises():
+    from vidura.reflect import call_claude_cli
+    proc = MagicMock(returncode=1, stdout="", stderr="auth expired")
+    with patch("vidura.reflect.shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("vidura.reflect.subprocess.run", return_value=proc):
+        with pytest.raises(ReflectorError):
+            call_claude_cli("prompt")
+
+
+def test_call_claude_cli_extracts_result_from_envelope():
+    from vidura.reflect import call_claude_cli
+    envelope = json.dumps({"result": '{"suggestions": []}', "session_id": "x"})
+    proc = MagicMock(returncode=0, stdout=envelope, stderr="")
+    with patch("vidura.reflect.shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("vidura.reflect.subprocess.run", return_value=proc):
+        assert call_claude_cli("prompt") == '{"suggestions": []}'
 
 
 def _mock_urlopen(body_bytes):

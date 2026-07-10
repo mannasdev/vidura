@@ -11,6 +11,7 @@ repeated error) contribute chunks to the payload — this keeps the
 payload budget (Task 7) spent on signal, not on every routine session.
 """
 
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ from vidura.contract import CONTRACT_VERSION, ReflectRequest, enforce_payload_bu
 from vidura.fix_index import load_fix_index
 from vidura.ingest import parse_session
 from vidura.redact import redact
-from vidura.reflect import ReflectorError, reflect
+from vidura.reflect import CLAUDE_CLI_CWD_TOKEN, ReflectorError, reflect
 from vidura.signals import extract_signals
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -40,6 +41,12 @@ def find_recent_sessions(
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     sessions = []
     for path in root.rglob("*.jsonl"):
+        # Vidura's own claude-CLI reflector sessions must never be
+        # re-ingested — their transcripts are dense with "[user]" markers
+        # and would dominate the friction-density ranking (recursion
+        # pollution). See reflect.CLAUDE_CLI_CWD.
+        if CLAUDE_CLI_CWD_TOKEN in str(path):
+            continue
         mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         if mtime >= cutoff:
             sessions.append(path)
@@ -106,9 +113,9 @@ def build_report_request(session_paths: list[Path]) -> ReflectRequest:
     )
 
 
-def print_report(request: ReflectRequest) -> int:
+def print_report(request: ReflectRequest, backend: str = "auto") -> int:
     try:
-        response = reflect(request)
+        response = reflect(request, backend=backend)
     except ReflectorError as exc:
         print(f"vidura report: degrading to silence: {exc}", file=sys.stderr)
         print("No suggestions this run (reflector unavailable).")
@@ -130,12 +137,13 @@ def print_report(request: ReflectRequest) -> int:
 
 
 def main() -> int:
+    backend = os.environ.get("VIDURA_REFLECTOR_BACKEND", "auto")
     sessions = find_recent_sessions()
     if not sessions:
         print("No Claude Code sessions found in the last 30 days.")
         return 0
     request = build_report_request(sessions)
-    return print_report(request)
+    return print_report(request, backend=backend)
 
 
 if __name__ == "__main__":
