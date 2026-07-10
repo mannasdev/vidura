@@ -48,38 +48,24 @@ struct CardView: View {
         state.mood?.adoptedUncelebratedIds ?? []
     }
 
-    /// The panel header IS the pet: a small pixel-art creature (mood ->
-    /// grid mapping lives in PixelPetGrid.grid(for:), the one designer
-    /// swap point for future art) next to the "Vidura" title and mood
-    /// word. Static swap only on mood change — no animation, per the
-    /// anti-Clippy invariant.
+    /// Plain text header — character art is on hold until the designer
+    /// delivers (owner's call: functionality and basic text first).
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                PixelPet(mood: currentMood)
-                    .frame(width: 72, height: 72)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Vidura")
-                        .font(.title2.weight(.semibold))
-                    if let mood = state.mood?.mood {
-                        Text(mood.capitalized)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
+            HStack {
+                Text("Vidura")
+                    .font(.headline)
                 Spacer()
+                if let mood = state.mood?.mood {
+                    Text(mood.capitalized)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .padding(16)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
             Divider()
         }
-    }
-
-    /// Falls back to ASLEEP (same default the rest of the app uses)
-    /// until the first poll resolves a real mood.
-    private var currentMood: Mood {
-        state.mood.flatMap { Mood(rawValue: $0.mood) } ?? .asleep
     }
 
     @ViewBuilder

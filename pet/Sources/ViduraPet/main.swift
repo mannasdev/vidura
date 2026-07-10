@@ -21,17 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let state = StateModel()
     private var moodCancellable: AnyCancellable?
 
-    private static let panelSize = NSSize(width: 400, height: 540)
+    private static let panelSize = NSSize(width: 400, height: 480)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            // Drawn in code (PixelPetMenuBarMark), never an SF Symbol
-            // lookup that could fail to resolve — the button image must
-            // ALWAYS be non-nil, or a crowded menu bar can render an
-            // empty status item with no anchor for the panel.
             button.image = Self.menuBarImage()
             button.target = self
             button.action = #selector(togglePanel(_:))
@@ -70,13 +66,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(isStirring ? "Vidura — stirring" : "Vidura")
     }
 
-    /// The one fixed menu-bar mark, rendered in template mode so AppKit
-    /// tints it correctly for both light and dark menu bars. Drawn in
-    /// code (never an SF Symbol lookup) so this is never nil.
+    /// One fixed menu-bar mark: a plain SF Symbol, template mode so it
+    /// tints for light/dark menu bars. Falls back to a drawn dot if the
+    /// symbol is unavailable — the image must never be nil or a crowded
+    /// menu bar renders an empty, unclickable item.
     private static func menuBarImage() -> NSImage {
-        let image = PixelPetMenuBarMark.image()
-        image.accessibilityDescription = "Vidura"
-        return image
+        if let symbol = NSImage(
+            systemSymbolName: "moon.zzz",
+            accessibilityDescription: "Vidura"
+        ) {
+            symbol.isTemplate = true
+            return symbol
+        }
+        let fallback = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 5, dy: 5)).fill()
+            return true
+        }
+        fallback.isTemplate = true
+        fallback.accessibilityDescription = "Vidura"
+        return fallback
     }
 
     @objc private func togglePanel(_ sender: AnyObject?) {
