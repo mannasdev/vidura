@@ -4,8 +4,39 @@ from pathlib import Path
 from unittest.mock import patch
 
 from vidura.contract import CONTRACT_VERSION, ReflectResponse, Suggestion
-from vidura.report import build_report_request, find_recent_sessions, main, print_report
+from vidura.report import DEFAULT_WINDOW_DAYS, build_report_request, find_recent_sessions, main, print_report
 from vidura.reflect import ReflectorError
+
+
+def test_default_window_days_is_14():
+    """Owner's rationale: old friction shouldn't drive counsel — habits
+    may have improved. 14 days replaces the original 30-day default; the
+    --window-days flag (vidura-sweep) still allows overriding it."""
+    assert DEFAULT_WINDOW_DAYS == 14
+
+
+def test_find_recent_sessions_default_window_excludes_20_day_old_file(tmp_path):
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    old = project_dir / "old.jsonl"
+    old.write_text("{}", encoding="utf-8")
+    old_time = (datetime.now(timezone.utc) - timedelta(days=20)).timestamp()
+    import os
+    os.utime(old, (old_time, old_time))
+    sessions = find_recent_sessions(root=tmp_path)  # default window, no override
+    assert old not in sessions
+
+
+def test_find_recent_sessions_default_window_includes_10_day_old_file(tmp_path):
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    recent = project_dir / "recent.jsonl"
+    recent.write_text("{}", encoding="utf-8")
+    recent_time = (datetime.now(timezone.utc) - timedelta(days=10)).timestamp()
+    import os
+    os.utime(recent, (recent_time, recent_time))
+    sessions = find_recent_sessions(root=tmp_path)  # default window, no override
+    assert recent in sessions
 
 
 def _write_session(path: Path, turns: list[dict]) -> None:

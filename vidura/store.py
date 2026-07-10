@@ -12,7 +12,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DB_DEFAULT_PATH = Path.home() / "Library" / "Application Support" / "Vidura" / "vidura.db"
@@ -253,6 +253,32 @@ def record_suggestion(conn: sqlite3.Connection, s) -> None:
         ),
     )
     conn.commit()
+
+
+def expire_stale_pending(
+    conn: sqlite3.Connection, now: datetime | None = None, days: int = 14
+) -> list[int]:
+    """Flip 'pending' suggestions untouched for >days to 'expired'.
+
+    Expiry is "aged out undecided", NOT a verdict — it is deliberately
+    excluded from the blocked statuses in blocked_fix_ids/record_suggestion,
+    so a fix_id that recurs later with fresh evidence gets a legitimate new
+    pending row (record_suggestion's merge path only matches status='pending'
+    rows, so an expired row can never absorb it).
+    """
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=days)
+    rows = conn.execute(
+        "SELECT id FROM suggestions WHERE status = 'pending' AND updated_at < ?",
+        (cutoff.isoformat(),),
+    ).fetchall()
+    ids = [r["id"] for r in rows]
+    if ids:
+        conn.executemany(
+            "UPDATE suggestions SET status = 'expired', updated_at = ? WHERE id = ?",
+            [(_now(), i) for i in ids],
+        )
+        conn.commit()
+    return ids
 
 
 def blocked_fix_ids(conn: sqlite3.Connection) -> set[str]:

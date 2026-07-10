@@ -1,10 +1,12 @@
 """vidura report: the M0 end-to-end entrypoint.
 
-Finds the last 30 days of Claude Code session logs, redacts secrets,
-extracts friction signals, chunks sessions that show friction, and
-runs ONE reflection pass — matching the original spec's M0 description:
-"Ingest the last 30 days of Claude Code JSONL, run one reflection pass,
-print a friction report."
+Finds the last DEFAULT_WINDOW_DAYS days of Claude Code session logs,
+redacts secrets, extracts friction signals, chunks sessions that show
+friction, and runs ONE reflection pass — matching the original spec's
+M0 description: "Ingest the last N days of Claude Code JSONL, run one
+reflection pass, print a friction report." The window was narrowed from
+30 to 14 days after first real use: old friction shouldn't drive
+counsel — habits may have improved since.
 
 Only sessions that show a friction signal (a re-prompt streak or a
 repeated error) contribute chunks to the payload — this keeps the
@@ -31,7 +33,9 @@ from vidura.signals import extract_signals
 from vidura.store import blocked_fix_ids, ledger_summary_for_prompt, open_db
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
-DEFAULT_WINDOW_DAYS = 30
+# 14 days, not 30: old friction shouldn't drive counsel — habits may have
+# improved since. --window-days (vidura-sweep) still overrides this.
+DEFAULT_WINDOW_DAYS = 14
 
 
 def find_recent_sessions(
@@ -175,7 +179,7 @@ def main() -> int:
     backend = os.environ.get("VIDURA_REFLECTOR_BACKEND", "auto")
     sessions = find_recent_sessions()
     if not sessions:
-        print("No Claude Code sessions found in the last 30 days.")
+        print(f"No Claude Code sessions found in the last {DEFAULT_WINDOW_DAYS} days.")
         return 0
     conn = open_db()
     try:

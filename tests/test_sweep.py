@@ -306,6 +306,42 @@ def test_batch_request_no_error_keys_no_retrieval(tmp_path):
     conn.close()
 
 
+def test_main_expires_stale_pending_and_logs_to_stderr(tmp_path, monkeypatch, capsys):
+    from datetime import datetime, timedelta, timezone
+
+    from vidura.store import ledger_entries, open_db, record_suggestion
+
+    db_path = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db_path))
+    conn = open_db(db_path)
+    record_suggestion(conn, Suggestion(fix_id="stale-fix", confidence=0.7, evidence=["e"], blunt_summary="s"))
+    row_id = ledger_entries(conn)[0]["id"]
+    stale_time = (datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
+    conn.execute("UPDATE suggestions SET updated_at = ? WHERE id = ?", (stale_time, row_id))
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "vidura sweep: expired 1 stale pending suggestion(s) (older than 14 days undecided)" in err
+
+    conn = open_db(db_path)
+    row = conn.execute("SELECT status FROM suggestions WHERE id = ?", (row_id,)).fetchone()
+    assert row["status"] == "expired"
+    conn.close()
+
+
+def test_main_no_expiry_line_when_nothing_expires(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "expired" not in err
+
+
 def test_gather_rescan_includes_already_reflected(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     root = tmp_path / "projects"

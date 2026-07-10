@@ -380,3 +380,123 @@ def test_executions_for_scoped_to_suggestion(tmp_path):
     assert len(executions_for(conn, 1)) == 1
     assert len(executions_for(conn, 2)) == 1
     conn.close()
+
+
+from datetime import datetime, timedelta, timezone
+
+from vidura.store import expire_stale_pending
+
+
+def _set_updated_at(conn, suggestion_id, when: datetime) -> None:
+    conn.execute(
+        "UPDATE suggestions SET updated_at = ? WHERE id = ?",
+        (when.isoformat(), suggestion_id),
+    )
+    conn.commit()
+
+
+def test_expire_stale_pending_flips_only_old_pending(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(fix_id="old-one"))
+    record_suggestion(conn, _sugg(fix_id="fresh-one"))
+    rows = ledger_entries(conn)
+    old_id = next(r["id"] for r in rows if r["fix_id"] == "old-one")
+    fresh_id = next(r["id"] for r in rows if r["fix_id"] == "fresh-one")
+    now = datetime.now(timezone.utc)
+    _set_updated_at(conn, old_id, now - timedelta(days=15))
+    _set_updated_at(conn, fresh_id, now - timedelta(days=1))
+
+    expired_ids = expire_stale_pending(conn, now=now, days=14)
+
+    assert expired_ids == [old_id]
+    old_row = conn.execute("SELECT status FROM suggestions WHERE id = ?", (old_id,)).fetchone()
+    fresh_row = conn.execute("SELECT status FROM suggestions WHERE id = ?", (fresh_id,)).fetchone()
+    assert old_row["status"] == "expired"
+    assert fresh_row["status"] == "pending"
+    conn.close()
+
+
+def test_expire_stale_pending_ignores_non_pending_statuses(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(fix_id="accepted-one"))
+    record_suggestion(conn, _sugg(fix_id="dismissed-one"))
+    rows = ledger_entries(conn)
+    accepted_id = next(r["id"] for r in rows if r["fix_id"] == "accepted-one")
+    dismissed_id = next(r["id"] for r in rows if r["fix_id"] == "dismissed-one")
+    set_status(conn, accepted_id, "accepted")
+    set_status(conn, dismissed_id, "dismissed")
+    now = datetime.now(timezone.utc)
+    _set_updated_at(conn, accepted_id, now - timedelta(days=30))
+    _set_updated_at(conn, dismissed_id, now - timedelta(days=30))
+
+    expired_ids = expire_stale_pending(conn, now=now, days=14)
+
+    assert expired_ids == []
+    accepted_row = conn.execute("SELECT status FROM suggestions WHERE id = ?", (accepted_id,)).fetchone()
+    dismissed_row = conn.execute("SELECT status FROM suggestions WHERE id = ?", (dismissed_id,)).fetchone()
+    assert accepted_row["status"] == "accepted"
+    assert dismissed_row["status"] == "dismissed"
+    conn.close()
+
+
+def test_expire_stale_pending_boundary_exactly_14_days_not_expired(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(fix_id="boundary-one"))
+    row_id = ledger_entries(conn)[0]["id"]
+    now = datetime.now(timezone.utc)
+    _set_updated_at(conn, row_id, now - timedelta(days=14))
+
+    expired_ids = expire_stale_pending(conn, now=now, days=14)
+
+    assert expired_ids == []
+    row = conn.execute("SELECT status FROM suggestions WHERE id = ?", (row_id,)).fetchone()
+    assert row["status"] == "pending"
+    conn.close()
+
+
+def test_expire_stale_pending_just_over_boundary_expires(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(fix_id="just-over"))
+    row_id = ledger_entries(conn)[0]["id"]
+    now = datetime.now(timezone.utc)
+    _set_updated_at(conn, row_id, now - timedelta(days=14, seconds=1))
+
+    expired_ids = expire_stale_pending(conn, now=now, days=14)
+
+    assert expired_ids == [row_id]
+    row = conn.execute("SELECT status FROM suggestions WHERE id = ?", (row_id,)).fetchone()
+    assert row["status"] == "expired"
+    conn.close()
+
+
+def test_expired_does_not_block_fix_id_and_does_not_absorb_new_pending(tmp_path):
+    """CRITICAL SEMANTICS: expiry is 'aged out undecided', not a verdict.
+    An expired row must not be added to blocked_fix_ids, and a fresh
+    recording of the same fix_id must create a NEW pending row rather
+    than merging into the expired one (merge path only targets
+    status='pending' rows)."""
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(fix_id="recurring-friction", confidence=0.7, evidence=["old evidence"]))
+    old_id = ledger_entries(conn)[0]["id"]
+    now = datetime.now(timezone.utc)
+    _set_updated_at(conn, old_id, now - timedelta(days=20))
+
+    expired_ids = expire_stale_pending(conn, now=now, days=14)
+    assert expired_ids == [old_id]
+
+    # not blocked — a fresh recurrence with new evidence must be allowed
+    assert "recurring-friction" not in blocked_fix_ids(conn)
+
+    # new recording creates a NEW pending row, not merged into the expired one
+    record_suggestion(conn, _sugg(fix_id="recurring-friction", confidence=0.9, evidence=["fresh evidence"]))
+    rows = conn.execute(
+        "SELECT * FROM suggestions WHERE fix_id = ? ORDER BY id", ("recurring-friction",)
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["status"] == "expired"
+    assert rows[0]["id"] == old_id
+    import json as _json
+    assert _json.loads(rows[0]["evidence"]) == ["old evidence"]  # untouched by the merge
+    assert rows[1]["status"] == "pending"
+    assert _json.loads(rows[1]["evidence"]) == ["fresh evidence"]  # new row, not merged
+    conn.close()

@@ -26,6 +26,7 @@ from vidura.report import CLAUDE_PROJECTS_DIR, DEFAULT_WINDOW_DAYS, find_recent_
 from vidura.signals import extract_signals
 from vidura.store import (
     _sanitize,
+    expire_stale_pending,
     ledger_entries,
     ledger_summary_for_prompt,
     mark_reflected,
@@ -247,6 +248,13 @@ def main(argv: list[str] | None = None) -> int:
         pruned = prune_chunks(conn)
         if pruned:
             print(f"vidura sweep: pruned {pruned} chunks older than 90 days", file=sys.stderr)
+        expired = expire_stale_pending(conn)
+        if expired:
+            print(
+                f"vidura sweep: expired {len(expired)} stale pending suggestion(s) "
+                "(older than 14 days undecided)",
+                file=sys.stderr,
+            )
         work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days, rescan=args.rescan)
         if not work:
             print("Nothing new to sweep — all friction sessions already reflected.")
