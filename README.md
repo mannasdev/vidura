@@ -110,6 +110,29 @@ sweep is the expensive one and incremental runs cost pennies. An
 interrupted sweep (session limit, ctrl-C) resumes where it left off —
 sessions are only marked seen when their batch succeeds.
 
+## The pet (menu-bar companion)
+
+Vidura's face: a small menu-bar presence that sleeps almost always —
+the rare moment it stirs IS the notification.
+
+```bash
+cd pet && swift build -c release
+.build/release/ViduraPet &
+```
+
+Moods (all computed locally by `vidura-state`, no model calls): asleep,
+content, **stirring** (counsel earned — one native notification, never
+repeated), proud (a suggestion you accepted measurably changed your
+behavior), concerned (friction trending above your own baseline). Click
+it: pending suggestions with evidence, Accept / Dismiss / **Do** — Do
+shows the exact dry-run preview and only enables Confirm when the
+preview succeeded. If the CLIs aren't on PATH, set `VIDURA_BIN` to your
+`.venv/bin`. Every 30 minutes it runs an incremental sweep in the
+background.
+
+No idle animation, no sound, nothing faster than a 60-second poll —
+restraint is the personality.
+
 ## M0 evaluation (the actual gate)
 
 This is not a unit test — it's the design doc's kill criterion. Run:
