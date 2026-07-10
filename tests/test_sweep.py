@@ -304,3 +304,15 @@ def test_batch_request_no_error_keys_no_retrieval(tmp_path):
         run_sweep(conn, [[_work(tmp_path, "a.jsonl")]])
     assert mock_reflect.call_args[0][0].similar_past_friction == []
     conn.close()
+
+
+def test_gather_rescan_includes_already_reflected(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    seen = _write_friction_session(root, "seen.jsonl")
+    mark_reflected(conn, seen)
+    assert gather_pending_work(conn, root=root, window_days=30) == []
+    work = gather_pending_work(conn, root=root, window_days=30, rescan=True)
+    assert [w.path for w in work] == [seen]
+    conn.close()

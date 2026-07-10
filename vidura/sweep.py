@@ -54,10 +54,15 @@ def gather_pending_work(
     conn,
     root: Path = CLAUDE_PROJECTS_DIR,
     window_days: int = DEFAULT_WINDOW_DAYS,
+    rescan: bool = False,
 ) -> list[SessionWork]:
+    """rescan=True ignores seen-marks: already-reflected sessions are
+    re-judged. Use after the fix index grows — old sessions were judged
+    against the old, smaller index. Ledger dedup/blocking still applies,
+    so a rescan can only add new findings, never repeat resolved ones."""
     work: list[SessionWork] = []
     for path in find_recent_sessions(root=root, window_days=window_days):
-        if not needs_reflection(conn, path):
+        if not rescan and not needs_reflection(conn, path):
             continue
         # Capture stats once, here, at gather time. A session can grow
         # during a minutes-long batch; stamping it with stats read later
@@ -230,6 +235,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batches", type=int, default=DEFAULT_MAX_BATCHES)
     parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
     parser.add_argument("--backend", choices=["auto", "claude", "ollama"], default=os.environ.get("VIDURA_REFLECTOR_BACKEND", "auto"))
+    parser.add_argument(
+        "--rescan",
+        action="store_true",
+        help="re-judge already-reflected sessions (use after the fix index grows; costs a full sweep)",
+    )
     args = parser.parse_args(argv)
 
     conn = open_db()
@@ -237,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         pruned = prune_chunks(conn)
         if pruned:
             print(f"vidura sweep: pruned {pruned} chunks older than 90 days", file=sys.stderr)
-        work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days)
+        work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days, rescan=args.rescan)
         if not work:
             print("Nothing new to sweep — all friction sessions already reflected.")
             _print_ledger_report(conn)

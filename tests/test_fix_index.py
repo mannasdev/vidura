@@ -25,3 +25,11 @@ def test_judge_executor_split_fix_present():
     fixes = load_fix_index()
     ids = [f.id for f in fixes]
     assert "judge-executor-split" in ids
+
+
+def test_no_fix_uses_reserved_novel_id():
+    assert all(f.id != "novel" for f in load_fix_index())
+
+
+def test_index_has_at_least_twenty_entries():
+    assert len(load_fix_index()) >= 20
