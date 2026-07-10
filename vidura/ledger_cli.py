@@ -9,7 +9,7 @@ ledger summary.
 import argparse
 import sys
 
-from vidura.store import ledger_entries, open_db, set_status
+from vidura.store import _sanitize, ledger_entries, open_db, set_status
 
 
 def _list(conn) -> None:
@@ -20,7 +20,7 @@ def _list(conn) -> None:
     for r in rows:
         novel = " (novel)" if r["novel"] else ""
         print(f"[{r['id']}] {r['status']:9s} {r['fix_id']}{novel} confidence={r['confidence']:.2f} seen_in={r['occurrences']}")
-        print(f"      {r['blunt_summary']}")
+        print(f"      {_sanitize(r['blunt_summary'])}")
 
 
 def main(argv: list[str] | None = None) -> int:

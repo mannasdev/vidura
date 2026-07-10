@@ -9,11 +9,21 @@ the audit log the eventual execution capability writes to.
 
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 DB_DEFAULT_PATH = Path.home() / "Library" / "Application Support" / "Vidura" / "vidura.db"
+
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _sanitize(text: str) -> str:
+    """Strip ASCII control chars (keeping \\n and \\t) from
+    model-echoed transcript text — evidence quotes and summaries can
+    carry ANSI escape sequences from the original terminal session."""
+    return _CONTROL_CHARS_RE.sub("", text)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -65,8 +75,18 @@ def needs_reflection(conn: sqlite3.Connection, path: Path) -> bool:
     return not (abs(row["mtime"] - st.st_mtime) < 1e-6 and row["size"] == st.st_size)
 
 
-def mark_reflected(conn: sqlite3.Connection, path: Path) -> None:
-    st = path.stat()
+def mark_reflected(
+    conn: sqlite3.Connection, path: Path, mtime: float | None = None, size: int | None = None
+) -> None:
+    """Stamp path as reflected. mtime/size default to a fresh path.stat()
+    when not provided, but callers that captured stats earlier (e.g. at
+    sweep gather-time) should pass them explicitly — otherwise a session
+    that grows during a minutes-long batch gets stamped with its NEW
+    (post-growth) stats and the appended tail is never reflected."""
+    if mtime is None or size is None:
+        st = path.stat()
+        mtime = st.st_mtime if mtime is None else mtime
+        size = st.st_size if size is None else size
     conn.execute(
         """INSERT INTO sessions(path, mtime, size, reflected_at)
            VALUES (?, ?, ?, ?)
@@ -74,7 +94,7 @@ def mark_reflected(conn: sqlite3.Connection, path: Path) -> None:
              mtime = excluded.mtime,
              size = excluded.size,
              reflected_at = excluded.reflected_at""",
-        (str(path), st.st_mtime, st.st_size, _now()),
+        (str(path), mtime, size, _now()),
     )
     conn.commit()
 

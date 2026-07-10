@@ -77,6 +77,24 @@ def test_mark_reflected_upserts(tmp_path):
     conn.close()
 
 
+def test_mark_reflected_accepts_explicit_mtime_and_size(tmp_path):
+    """A caller can stamp a session with stats captured earlier (e.g. at
+    gather time), rather than the file's CURRENT (possibly grown) stats —
+    otherwise a session that grows mid-sweep never gets its appended tail
+    reflected."""
+    conn = open_db(tmp_path / "db.sqlite")
+    p = _session_file(tmp_path)
+    stale_mtime = p.stat().st_mtime
+    stale_size = p.stat().st_size
+    # file grows AFTER we captured the stale stats above
+    p.write_text('{"more": "content grew"}', encoding="utf-8")
+    mark_reflected(conn, p, mtime=stale_mtime, size=stale_size)
+    # needs_reflection compares against the file's real (grown) stats,
+    # so stamping with stale stats must leave it needing reflection again
+    assert needs_reflection(conn, p) is True
+    conn.close()
+
+
 from vidura.contract import Suggestion
 from vidura.store import (
     blocked_fix_ids,

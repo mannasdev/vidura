@@ -47,3 +47,23 @@ def test_empty_ledger_list(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
     assert main(["list"]) == 0
     assert "empty" in capsys.readouterr().out.lower()
+
+
+def test_list_strips_control_chars_from_summary(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db))
+    conn = open_db(db)
+    record_suggestion(
+        conn,
+        Suggestion(
+            fix_id="repeated-error-loop",
+            confidence=0.9,
+            evidence=["q"],
+            blunt_summary="\x1b[31msummary with escape\x1b[0m",
+        ),
+    )
+    conn.close()
+    assert main(["list"]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert "summary with escape" in out

@@ -72,6 +72,34 @@ def test_gather_caps_per_session_chunks(tmp_path):
     conn.close()
 
 
+def test_gather_captures_mtime_and_size_at_gather_time(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    friction = _write_friction_session(root, "friction.jsonl")
+    st = friction.stat()
+    work = gather_pending_work(conn, root=root, window_days=30)
+    assert work[0].mtime == st.st_mtime
+    assert work[0].size == st.st_size
+    conn.close()
+
+
+def test_sweep_survives_growth_during_batch(tmp_path):
+    """A session that grows between gather and mark_reflected must still
+    need re-reflection afterward — the stats captured at gather time
+    (not the CURRENT, grown, file) are what gets stamped."""
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    friction = _write_friction_session(root, "friction.jsonl")
+    work = gather_pending_work(conn, root=root, window_days=30)
+    # simulate the file growing mid-batch, after gather captured its stats
+    friction.write_text(friction.read_text() + json.dumps(_user_turn("appended tail")) + "\n", encoding="utf-8")
+    with patch("vidura.sweep.reflect", return_value=_response()):
+        run_sweep(conn, [work])
+    assert needs_reflection(conn, friction) is True
+
+
 def test_pack_batches_whole_sessions_densest_first():
     a = SessionWork(path=Path("a"), chunks=["x" * 30000], streak_count=5)
     b = SessionWork(path=Path("b"), chunks=["y" * 30000], streak_count=1)
@@ -100,7 +128,14 @@ from vidura.sweep import run_sweep
 
 def _work(tmp_path, name, streaks=1):
     p = _write_friction_session(tmp_path, name)
-    return SessionWork(path=p, chunks=[f"[user] chunk of {name}"], streak_count=streaks)
+    st = p.stat()
+    return SessionWork(
+        path=p,
+        chunks=[f"[user] chunk of {name}"],
+        streak_count=streaks,
+        mtime=st.st_mtime,
+        size=st.st_size,
+    )
 
 
 def _response(fix_id="judge-executor-split", confidence=0.85):
@@ -141,6 +176,17 @@ def test_failed_batch_not_marked_and_sweep_continues(tmp_path):
     conn.close()
 
 
+def test_mark_reflected_failure_counts_batch_failed_and_continues(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    batches = [[_work(tmp_path, "a.jsonl")], [_work(tmp_path, "b.jsonl")]]
+    with patch("vidura.sweep.reflect", return_value=_response()), \
+         patch("vidura.sweep.mark_reflected", side_effect=[FileNotFoundError("gone"), None]):
+        stats = run_sweep(conn, batches)
+    assert stats["batches_failed"] == 1
+    assert stats["batches_run"] == 1
+    conn.close()
+
+
 def test_max_batches_limits_work(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     batches = [[_work(tmp_path, f"{i}.jsonl")] for i in range(5)]
@@ -165,6 +211,27 @@ def test_sweep_passes_ledger_to_reflector(tmp_path):
 
 
 from vidura.sweep import main
+
+
+def test_print_ledger_report_strips_control_chars(tmp_path, capsys):
+    conn = open_db(tmp_path / "db.sqlite")
+    from vidura.store import record_suggestion
+    record_suggestion(
+        conn,
+        Suggestion(
+            fix_id="repeated-error-loop",
+            confidence=0.9,
+            evidence=["\x1b[31mred quote\x1b[0m"],
+            blunt_summary="\x1b[31msummary with escape\x1b[0m",
+        ),
+    )
+    from vidura.sweep import _print_ledger_report
+    _print_ledger_report(conn)
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert "summary with escape" in out
+    assert "red quote" in out
+    conn.close()
 
 
 def test_main_no_pending_work(tmp_path, monkeypatch, capsys):

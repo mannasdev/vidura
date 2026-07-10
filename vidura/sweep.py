@@ -23,6 +23,7 @@ from vidura.reflect import reflect
 from vidura.report import CLAUDE_PROJECTS_DIR, DEFAULT_WINDOW_DAYS, find_recent_sessions
 from vidura.signals import extract_signals
 from vidura.store import (
+    _sanitize,
     ledger_entries,
     ledger_summary_for_prompt,
     mark_reflected,
@@ -40,6 +41,8 @@ class SessionWork:
     path: Path
     chunks: list[str]
     streak_count: int
+    mtime: float = 0.0
+    size: int = 0
 
 
 def gather_pending_work(
@@ -51,6 +54,11 @@ def gather_pending_work(
     for path in find_recent_sessions(root=root, window_days=window_days):
         if not needs_reflection(conn, path):
             continue
+        # Capture stats once, here, at gather time. A session can grow
+        # during a minutes-long batch; stamping it with stats read later
+        # (at mark-time) would record the NEW mtime/size and the
+        # appended tail would never be reflected.
+        st = path.stat()
         turns = list(parse_session(path))
         if not turns:
             continue
@@ -71,7 +79,13 @@ def gather_pending_work(
             kept.append(chunk)
             total += len(chunk)
         work.append(
-            SessionWork(path=path, chunks=kept, streak_count=len(signals.reprompt_streaks))
+            SessionWork(
+                path=path,
+                chunks=kept,
+                streak_count=len(signals.reprompt_streaks),
+                mtime=st.st_mtime,
+                size=st.st_size,
+            )
         )
     return work
 
@@ -133,19 +147,23 @@ def run_sweep(
         request = _batch_request(conn, batch)
         try:
             response = reflect(request, backend=backend)
+            for suggestion in response.suggestions:
+                record_suggestion(conn, suggestion)
+                stats["suggestions_recorded"] += 1
+            for w in batch:
+                mark_reflected(conn, w.path, mtime=w.mtime, size=w.size)
+                stats["sessions_reflected"] += 1
         except Exception as exc:
             # Same silence principle as the report: a failed batch is
             # skipped and logged; its sessions stay unmarked so the next
-            # sweep resumes exactly here.
+            # sweep resumes exactly here. Widened to cover the
+            # record_suggestion/mark_reflected loops too — a locked db or
+            # a session file deleted mid-sweep (FileNotFoundError from
+            # mark_reflected's stat) must not abort the whole sweep,
+            # just this batch.
             print(f"vidura sweep: batch {i}/{len(selected)} failed, will retry next run: {exc}", file=sys.stderr)
             stats["batches_failed"] += 1
             continue
-        for suggestion in response.suggestions:
-            record_suggestion(conn, suggestion)
-            stats["suggestions_recorded"] += 1
-        for w in batch:
-            mark_reflected(conn, w.path)
-            stats["sessions_reflected"] += 1
         stats["batches_run"] += 1
         print(f"vidura sweep: batch {i}/{len(selected)} done ({len(batch)} sessions)", file=sys.stderr)
     return stats
@@ -159,10 +177,10 @@ def _print_ledger_report(conn) -> None:
     print(f"Vidura friction report — {len(pending)} pending suggestion(s)\n")
     for row in pending:
         print(f"[{row['id']}] [{row['fix_id']}] confidence={row['confidence']:.2f} seen_in={row['occurrences']} batch(es)")
-        print(f"    {row['blunt_summary']}")
+        print(f"    {_sanitize(row['blunt_summary'])}")
         import json as _json
         for quote in _json.loads(row["evidence"]):
-            print(f"      > {quote}")
+            print(f"      > {_sanitize(quote)}")
         print()
     print("Accept/dismiss with: vidura-ledger accept <id> | vidura-ledger dismiss <id>")
 
