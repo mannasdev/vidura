@@ -48,24 +48,40 @@ struct CardView: View {
         state.mood?.adoptedUncelebratedIds ?? []
     }
 
+    /// The panel header IS the pet: a large placeholder face (mood ->
+    /// symbol mapping lives in Mood.faceSymbolName, ready to be swapped
+    /// for real designer art later) next to the "Vidura" title and mood
+    /// word. Static swap only on mood change — no animation, per the
+    /// anti-Clippy invariant.
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: state.mood.map { Mood(rawValue: $0.mood)?.symbolName ?? Mood.asleep.symbolName } ?? Mood.asleep.symbolName)
+            HStack(spacing: 12) {
+                Image(systemName: currentMood.faceSymbolName)
+                    .font(.system(size: 72, weight: .regular))
                     .foregroundStyle(.mint)
-                    .font(.callout)
-                Text("Vidura")
-                    .font(.headline)
-                Spacer()
-                if let mood = state.mood?.mood {
-                    Text(mood.capitalized)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .frame(width: 72, height: 72)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Vidura")
+                        .font(.title2.weight(.semibold))
+                    if let mood = state.mood?.mood {
+                        Text(mood.capitalized)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+
+                Spacer()
             }
-            .padding(12)
+            .padding(16)
             Divider()
         }
+    }
+
+    /// Falls back to ASLEEP (same default the rest of the app uses)
+    /// until the first poll resolves a real mood.
+    private var currentMood: Mood {
+        state.mood.flatMap { Mood(rawValue: $0.mood) } ?? .asleep
     }
 
     @ViewBuilder

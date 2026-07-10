@@ -18,10 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            button.image = NSImage(
-                systemSymbolName: Mood.asleep.symbolName,
-                accessibilityDescription: "Vidura"
-            )
+            button.image = Self.menuBarImage()
             button.target = self
             button.action = #selector(togglePopover(_:))
         }
@@ -29,7 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 400, height: 480)
+        // 540pt (up from 480) makes room for the panel's new ~72pt face
+        // header without shrinking the suggestion-card scroll area below it.
+        popover.contentSize = NSSize(width: 400, height: 540)
         popover.contentViewController = NSHostingController(rootView: CardView(state: state))
         self.popover = popover
 
@@ -42,27 +41,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         moodCancellable?.cancel()
     }
 
-    /// Mirrors state.mood into the status item's glyph via a Combine
-    /// sink on the @Published property — fires exactly when `mood`
-    /// changes, with no timer of any kind. This is what makes the
-    /// anti-Clippy "no timers faster than 60s" invariant unambiguous:
-    /// there is nothing here polling at any interval at all.
+    /// The menu bar mark is fixed — it does not change per mood. The
+    /// ONLY thing this observes is the STIRRING transition, to show a
+    /// small "•" badge on the status item title (the cleanest standard
+    /// approach for a status-item indicator, short of a custom NSView).
+    /// No other mood touches the menu bar at all.
     private func observeMood() {
         moodCancellable = state.$mood
             .map { $0?.mood }
             .removeDuplicates()
             .sink { [weak self] moodRaw in
                 guard let self, let moodRaw else { return }
-                self.updateGlyph(for: moodRaw)
+                self.updateBadge(for: moodRaw)
             }
     }
 
-    private func updateGlyph(for moodRaw: String) {
-        let symbol = Mood(rawValue: moodRaw)?.symbolName ?? Mood.asleep.symbolName
-        statusItem?.button?.image = NSImage(
-            systemSymbolName: symbol,
-            accessibilityDescription: "Vidura — \(moodRaw.lowercased())"
+    private func updateBadge(for moodRaw: String) {
+        guard let button = statusItem?.button else { return }
+        let isStirring = moodRaw == Mood.stirring.rawValue
+        button.title = isStirring ? "\u{2022}" : ""
+        button.imagePosition = isStirring ? .imageLeading : .imageOnly
+        button.setAccessibilityLabel(isStirring ? "Vidura — stirring" : "Vidura")
+    }
+
+    /// The one fixed menu-bar mark, rendered in template mode so AppKit
+    /// tints it correctly for both light and dark menu bars, and for the
+    /// selected/highlighted state when the popover is open.
+    private static func menuBarImage() -> NSImage? {
+        let image = NSImage(
+            systemSymbolName: Mood.menuBarSymbolName,
+            accessibilityDescription: "Vidura"
         )
+        image?.isTemplate = true
+        return image
     }
 
     @objc private func togglePopover(_ sender: AnyObject?) {

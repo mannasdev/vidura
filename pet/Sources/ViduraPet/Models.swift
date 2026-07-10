@@ -42,16 +42,25 @@ enum Mood: String {
     case proud = "PROUD"
     case concerned = "CONCERNED"
 
-    /// SF Symbol per the plan's mood table. Static glyph only — no
-    /// animation APIs are used anywhere in this app (anti-Clippy
-    /// invariant: no motion to attract attention).
-    var symbolName: String {
+    /// The menu bar glyph is fixed and does NOT vary by mood — see
+    /// `AppDelegate` in main.swift. This static symbol is the ONE mark
+    /// ever shown in the status item, template-rendered so AppKit tints
+    /// it to match the menu bar's light/dark appearance automatically.
+    static let menuBarSymbolName = "circle.hexagongrid.circle"
+
+    /// Mood -> big expressive face glyph shown in the popover header.
+    /// PLACEHOLDER ONLY: these SF Symbols stand in for future designer
+    /// art (a real illustrated face per mood). When that art lands, this
+    /// is the one function to swap — nothing else in the app should need
+    /// to know how a mood is drawn. Static glyph only, per the anti-Clippy
+    /// invariant: no animation anywhere in this app.
+    var faceSymbolName: String {
         switch self {
-        case .asleep: return "moon.zzz"
-        case .content: return "moon.stars"
+        case .asleep: return "powersleep"
+        case .content: return "face.smiling"
         case .stirring: return "sparkles"
-        case .proud: return "star.circle"
-        case .concerned: return "cloud"
+        case .proud: return "star.circle.fill"
+        case .concerned: return "cloud.fill"
         }
     }
 }
