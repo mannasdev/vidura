@@ -26,6 +26,11 @@ from vidura.signals import extract_signals
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_WINDOW_DAYS = 30
 
+# Larger than the contract's conservative default (24k): the reflector now
+# requests a 16384-token context window (reflect.OLLAMA_NUM_CTX), which
+# comfortably fits ~48k chars of chunks plus prompt scaffolding.
+REPORT_PAYLOAD_BUDGET_CHARS = 48000
+
 
 def find_recent_sessions(
     root: Path = CLAUDE_PROJECTS_DIR, window_days: int = DEFAULT_WINDOW_DAYS
@@ -66,7 +71,15 @@ def build_report_request(session_paths: list[Path]) -> ReflectRequest:
         if has_friction:
             all_chunks.extend(c.text for c in chunk_turns(turns))
 
-    chunks = enforce_payload_budget(all_chunks)
+    # Rank chunks by friction density: the payload budget keeps only a
+    # sliver of 30 days of logs, and recency alone starves the reflector
+    # of the very transcript the signals point at (observed in M0 round 2:
+    # 716 reprompt streaks in signals, none visible in the chunks). Density
+    # of user turns is a cheap proxy for re-prompt friction.
+    # enforce_payload_budget keeps the TAIL of the list, so sort ascending —
+    # the densest chunks land at the end and survive the cut.
+    all_chunks.sort(key=lambda text: text.count("[user]"))
+    chunks = enforce_payload_budget(all_chunks, budget_chars=REPORT_PAYLOAD_BUDGET_CHARS)
 
     fix_index_dicts = [
         {

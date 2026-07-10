@@ -131,3 +131,27 @@ def test_main_no_sessions_found(monkeypatch, capsys):
     exit_code = main()
     assert exit_code == 0
     assert "No Claude Code sessions found" in capsys.readouterr().out
+
+
+def test_build_report_request_prioritizes_friction_dense_chunks(tmp_path):
+    ts = "2026-07-01T10:00:00.000Z"
+    # session A: one streak turn pair, low user-turn density in its chunk
+    session_a = tmp_path / "a.jsonl"
+    _write_session(session_a, [
+        _user_turn("low density " + "x" * 30000, ts),
+        _user_turn("second", ts),
+        _assistant_turn("done", ts, tool_use=True),
+    ])
+    # session B: many consecutive user turns — high density
+    session_b = tmp_path / "b.jsonl"
+    _write_session(session_b, [
+        _user_turn("try again " + "y" * 30000, ts),
+        _user_turn("no, not like that", ts),
+        _user_turn("still wrong", ts),
+        _user_turn("one more time", ts),
+        _assistant_turn("ok", ts, tool_use=True),
+    ])
+    request = build_report_request([session_a, session_b])
+    # both sessions produce oversized chunks; budget forces a cut, and the
+    # user-turn-dense chunk (session B's tail) must survive it
+    assert any("not like that" in c for c in request.chunks)
