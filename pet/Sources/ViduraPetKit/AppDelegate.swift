@@ -149,7 +149,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPanel() {
         guard statusItem?.button != nil else { return }
-        state.refresh()
+        state.panelDidOpen()
 
         let panel = self.panel ?? makePanel()
         self.panel = panel

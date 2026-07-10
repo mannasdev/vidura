@@ -17,6 +17,19 @@ public final class StateModel: ObservableObject {
     /// notification banner is dismissed. Not itself a notification.
     @Published private(set) var justEnteredStirring = false
 
+    /// Increments once per `panelDidOpen()` call — CardView observes this
+    /// (rather than SwiftUI's `onAppear`, which only fires once for the
+    /// lifetime of the reused NSHostingController) to know exactly when a
+    /// fresh panel-open has happened, so the celebration hop can fire "at
+    /// most once per panel-open" as the animation spec requires.
+    @Published private(set) var panelOpenCount = 0
+    /// Whether `adopted_uncelebrated` was non-empty at the moment of the
+    /// most recent `panelDidOpen()` call — the celebration hop's trigger
+    /// condition, captured once at open time so a later `celebrate()`
+    /// call (which empties the list) can't retroactively cancel a hop
+    /// that already started.
+    @Published private(set) var shouldCelebrateOnOpen = false
+
     private var previousMood: String?
     private var pollTimer: Timer?
     private var sweepTimer: Timer?
@@ -60,6 +73,16 @@ public final class StateModel: ObservableObject {
         pollTimer = nil
         sweepTimer?.invalidate()
         sweepTimer = nil
+    }
+
+    /// Called by AppDelegate exactly once per panel-open (not per
+    /// `refresh()`, which also fires on the 60s poll timer while the
+    /// panel is closed). Captures whether a celebration hop should fire
+    /// for this open, then refreshes as usual.
+    public func panelDidOpen() {
+        shouldCelebrateOnOpen = !(mood?.adoptedUncelebratedIds.isEmpty ?? true)
+        panelOpenCount += 1
+        refresh()
     }
 
     /// Re-fetch mood + ledger. Safe to call from a manual popover-open

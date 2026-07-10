@@ -61,11 +61,45 @@ enum CharacterAsset {
 /// SF Symbol glyph if the bundled asset is somehow missing, so a
 /// packaging problem degrades gracefully instead of leaving a blank
 /// header.
+///
+/// Animation (all panel-internal — see AnimationPolicy/the governing
+/// invariant that the menu bar itself never moves):
+///   - Breathing: a slow vertical bob, only while ASLEEP or CONTENT.
+///   - Micro-motion: an occasional tiny rotation nudge, any mood except
+///     ASLEEP.
+///   - Mood change: opacity crossfade between frames.
+///   - Celebration: one small hop, fired at most once per panel-open,
+///     when `celebrateOnAppear` is true.
+/// All timers are `Task.sleep` loops owned by this view and cancelled on
+/// disappear — no NSTimer leaks. Every knob is gated by `AnimationPolicy`,
+/// which itself collapses to "off"/"instant" under Reduce Motion.
 public struct CharacterPortrait: View {
     let mood: PetMood
+    let celebrateOnAppear: Bool
+    let policy: AnimationPolicy
 
-    public init(mood: PetMood) {
+    @State private var breathingUp = false
+    @State private var microMotionTask: Task<Void, Never>?
+    @State private var microMotionAngle: Double = 0
+    @State private var hopOffset: CGFloat = 0
+    @State private var hasFiredCelebration = false
+
+    public init(
+        mood: PetMood,
+        celebrateOnAppear: Bool = false,
+        policy: AnimationPolicy = AnimationPolicy(reduceMotion: AnimationPolicy.systemReduceMotion)
+    ) {
         self.mood = mood
+        self.celebrateOnAppear = celebrateOnAppear
+        self.policy = policy
+    }
+
+    private var breathingActive: Bool {
+        policy.breathingEnabled && (mood == .asleep || mood == .content)
+    }
+
+    private var microMotionActive: Bool {
+        policy.microMotionEnabled && mood != .asleep
     }
 
     public var body: some View {
@@ -84,5 +118,86 @@ public struct CharacterPortrait: View {
             }
         }
         .frame(width: 96, height: 96)
+        .id(mood)
+        .transition(.opacity)
+        .animation(.easeInOut(duration: policy.crossfadeDuration), value: mood)
+        .rotationEffect(.degrees(microMotionActive ? microMotionAngle : 0))
+        .offset(y: (breathingActive ? breathingBobOffset : 0) - hopOffset)
+        .onAppear {
+            startBreathingIfNeeded()
+            startMicroMotionLoop()
+            fireCelebrationIfNeeded()
+        }
+        .onDisappear {
+            microMotionTask?.cancel()
+            microMotionTask = nil
+        }
+        .onChange(of: mood) { _ in
+            startBreathingIfNeeded()
+            startMicroMotionLoop()
+        }
+    }
+
+    // MARK: - Breathing
+
+    private var breathingBobOffset: CGFloat {
+        breathingUp ? -AnimationPolicy.breathingAmplitude : AnimationPolicy.breathingAmplitude
+    }
+
+    private func startBreathingIfNeeded() {
+        guard breathingActive else {
+            breathingUp = false
+            return
+        }
+        withAnimation(
+            .easeInOut(duration: AnimationPolicy.breathingPeriod / 2)
+                .repeatForever(autoreverses: true)
+        ) {
+            breathingUp = true
+        }
+    }
+
+    // MARK: - Micro-motion
+
+    private func startMicroMotionLoop() {
+        microMotionTask?.cancel()
+        guard microMotionActive else {
+            microMotionAngle = 0
+            return
+        }
+        microMotionTask = Task { @MainActor in
+            while !Task.isCancelled {
+                let interval = Double.random(
+                    in: AnimationPolicy.microMotionMinInterval...AnimationPolicy.microMotionMaxInterval
+                )
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                if Task.isCancelled { break }
+                let nudge = Bool.random() ? 2.0 : -2.0
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    microMotionAngle = nudge
+                }
+                try? await Task.sleep(nanoseconds: UInt64(0.3 * 1_000_000_000))
+                if Task.isCancelled { break }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    microMotionAngle = 0
+                }
+            }
+        }
+    }
+
+    // MARK: - Celebration hop
+
+    private func fireCelebrationIfNeeded() {
+        guard celebrateOnAppear, policy.celebrationEnabled, !hasFiredCelebration else { return }
+        hasFiredCelebration = true
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.5)) {
+            hopOffset = 6
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(0.4 * 1_000_000_000))
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.5)) {
+                hopOffset = 0
+            }
+        }
     }
 }

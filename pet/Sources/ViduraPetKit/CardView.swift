@@ -7,12 +7,15 @@ import AppKit
 /// (Pencil doc `616fb6b5-a712-4cbc-af00-a3b9e6d04246`). Structure and
 /// tokens follow the spec exactly (§2); this remains a pure reskin —
 /// same StateModel, same Accept/Dismiss/Do/confirm flow, same
-/// content-hugging sizing contract AppDelegate depends on. No animation
-/// APIs, no sound: mood/state changes are static image and text swaps.
+/// content-hugging sizing contract AppDelegate depends on. Panel-internal
+/// animation (breathing, micro-motion, mood crossfade, celebration hop)
+/// lives in CharacterPortrait, gated by AnimationPolicy; the menu bar
+/// itself never animates — see AppDelegate.
 public struct CardView: View {
     @ObservedObject var state: StateModel
 
     @State private var pendingDoAction: DoSheetContext?
+    private let policy = AnimationPolicy(reduceMotion: AnimationPolicy.systemReduceMotion)
 
     public init(state: StateModel) {
         self.state = state
@@ -81,7 +84,12 @@ public struct CardView: View {
 
     private var hero: some View {
         HStack(alignment: .center, spacing: 18) {
-            CharacterPortrait(mood: currentMood)
+            CharacterPortrait(
+                mood: currentMood,
+                celebrateOnAppear: state.shouldCelebrateOnOpen,
+                policy: policy
+            )
+            .id(state.panelOpenCount)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Vidura")
                     .font(Theme.nameFont)
