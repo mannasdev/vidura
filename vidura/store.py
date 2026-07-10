@@ -91,7 +91,12 @@ def record_suggestion(conn: sqlite3.Connection, s) -> None:
       other (one dismissed novel must not silence all future novels)
     """
     now = _now()
-    if not s.novel:
+    # A fix-index entry literally named "novel" would otherwise collide
+    # with dismissed/accepted novel rows under the merge-and-block logic
+    # below — force novel semantics for that fix_id regardless of the
+    # caller-supplied novel flag.
+    novel = s.novel or s.fix_id == "novel"
+    if not novel:
         blocked = conn.execute(
             "SELECT 1 FROM suggestions WHERE fix_id = ? AND status IN ('accepted', 'dismissed')",
             (s.fix_id,),
@@ -131,7 +136,7 @@ def record_suggestion(conn: sqlite3.Connection, s) -> None:
             s.confidence,
             s.blunt_summary,
             json.dumps(s.evidence[:EVIDENCE_POOL_CAP]),
-            1 if s.novel else 0,
+            1 if novel else 0,
             now,
             now,
         ),
@@ -167,13 +172,27 @@ def set_status(conn: sqlite3.Connection, suggestion_id: int, status: str) -> boo
     return cur.rowcount > 0
 
 
+LEDGER_SUMMARY_NOVEL_CAP = 10
+
+
 def ledger_summary_for_prompt(conn: sqlite3.Connection) -> list[dict]:
     """Compact ledger view for the reflector prompt: fix_id + status +
-    summary only — evidence stays out to keep the payload lean."""
+    summary only — evidence stays out to keep the payload lean.
+
+    Non-novel rows are kept in full (they're deduped by fix_id so the
+    count stays bounded), but novel rows insert a fresh row every time
+    and can grow without bound — cap them to the most recent
+    LEDGER_SUMMARY_NOVEL_CAP so the ledger can't silently re-create the
+    unbounded-prompt-growth failure mode it exists to prevent."""
     rows = conn.execute(
-        "SELECT fix_id, status, blunt_summary FROM suggestions ORDER BY id"
+        "SELECT id, fix_id, status, blunt_summary, novel FROM suggestions ORDER BY id"
     ).fetchall()
+    non_novel = [r for r in rows if not r["novel"]]
+    novel = sorted((r for r in rows if r["novel"]), key=lambda r: r["id"], reverse=True)
+    novel = novel[:LEDGER_SUMMARY_NOVEL_CAP]
+    kept = non_novel + novel
+    kept.sort(key=lambda r: r["id"])
     return [
         {"fix_id": r["fix_id"], "status": r["status"], "blunt_summary": r["blunt_summary"]}
-        for r in rows
+        for r in kept
     ]

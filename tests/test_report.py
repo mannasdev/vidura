@@ -205,6 +205,59 @@ def test_build_report_request_caps_reprompt_streaks_and_error_repeats(tmp_path, 
     assert set(request.signals["error_repeats"].keys()) == top_20_keys
 
 
+def test_main_prints_no_suggestions_when_only_blocked_fix_returned(tmp_path, monkeypatch, capsys):
+    from vidura.store import open_db, record_suggestion, set_status
+    from vidura.contract import Suggestion as StoreSuggestion
+
+    db_path = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db_path))
+    conn = open_db(db_path)
+    record_suggestion(conn, StoreSuggestion(fix_id="judge-executor-split", confidence=0.8, evidence=["q"], blunt_summary="split it"))
+    row_id = conn.execute("SELECT id FROM suggestions").fetchone()["id"]
+    set_status(conn, row_id, "dismissed")
+    conn.close()
+
+    session = tmp_path / "session.jsonl"
+    ts = "2026-07-01T10:00:00.000Z"
+    _write_session(session, [_user_turn("hi", ts)])
+    monkeypatch.setattr("vidura.report.find_recent_sessions", lambda: [session])
+
+    response = ReflectResponse(
+        contract_version=CONTRACT_VERSION,
+        suggestions=[Suggestion(fix_id="judge-executor-split", confidence=0.9, evidence=["e"], blunt_summary="dismissed one")],
+    )
+    with patch("vidura.report.reflect", return_value=response):
+        exit_code = main()
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "No suggestions this run" in out
+    assert "dismissed one" not in out
+
+
+def test_main_passes_ledger_summary_into_request(tmp_path, monkeypatch):
+    from vidura.store import open_db, record_suggestion
+    from vidura.contract import Suggestion as StoreSuggestion
+
+    db_path = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db_path))
+    conn = open_db(db_path)
+    record_suggestion(conn, StoreSuggestion(fix_id="judge-executor-split", confidence=0.8, evidence=["q"], blunt_summary="split it"))
+    conn.close()
+
+    session = tmp_path / "session.jsonl"
+    ts = "2026-07-01T10:00:00.000Z"
+    _write_session(session, [_user_turn("hi", ts)])
+    monkeypatch.setattr("vidura.report.find_recent_sessions", lambda: [session])
+
+    response = ReflectResponse(contract_version=CONTRACT_VERSION, suggestions=[])
+    with patch("vidura.report.reflect", return_value=response) as mock_reflect:
+        main()
+    assert mock_reflect.call_count == 1
+    request_arg = mock_reflect.call_args[0][0]
+    assert request_arg.ledger
+    assert request_arg.ledger[0]["fix_id"] == "judge-executor-split"
+
+
 def test_find_recent_sessions_excludes_vidura_reflector_sessions(tmp_path):
     project_dir = tmp_path / "-Users-x--vidura-reflector-cwd"
     project_dir.mkdir()

@@ -166,3 +166,26 @@ def test_ledger_summary_for_prompt_shape(tmp_path):
     assert summary[0]["status"] == "pending"
     assert "evidence" not in summary[0]  # keep the prompt lean
     conn.close()
+
+
+def test_ledger_summary_for_prompt_caps_novel_rows(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    for i in range(15):
+        record_suggestion(conn, _sugg(fix_id="novel", novel=True, evidence=[f"novel quote {i}"]))
+    record_suggestion(conn, _sugg(fix_id="judge-executor-split"))
+    record_suggestion(conn, _sugg(fix_id="context-window-overflow"))
+    summary = ledger_summary_for_prompt(conn)
+    assert len(summary) == 12  # 2 non-novel + 10 most recent novel
+
+
+def test_record_suggestion_forces_novel_semantics_for_fix_id_novel(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    record_suggestion(conn, _sugg(fix_id="novel", novel=False))
+    row_id = ledger_entries(conn)[0]["id"]
+    set_status(conn, row_id, "dismissed")
+    # a second suggestion with fix_id "novel" (novel flag False) must still
+    # insert fresh rather than being blocked by the dismissed row above
+    record_suggestion(conn, _sugg(fix_id="novel", novel=False, confidence=0.99))
+    assert len(ledger_entries(conn, status="pending")) == 1
+    assert "novel" not in blocked_fix_ids(conn)
+    conn.close()

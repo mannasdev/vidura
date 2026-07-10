@@ -28,6 +28,7 @@ from vidura.ingest import parse_session
 from vidura.redact import redact
 from vidura.reflect import CLAUDE_CLI_CWD_TOKEN, ReflectorError, reflect
 from vidura.signals import extract_signals
+from vidura.store import blocked_fix_ids, ledger_summary_for_prompt, open_db
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_WINDOW_DAYS = 30
@@ -53,7 +54,9 @@ def find_recent_sessions(
     return sessions
 
 
-def build_report_request(session_paths: list[Path]) -> ReflectRequest:
+def build_report_request(
+    session_paths: list[Path], ledger: list[dict] | None = None
+) -> ReflectRequest:
     all_chunks: list[str] = []
     sessions_scanned = 0
     all_reprompt_streaks: list[int] = []
@@ -122,11 +125,11 @@ def build_report_request(session_paths: list[Path]) -> ReflectRequest:
         },
         chunks=chunks,
         fix_index=fix_index_dicts,
-        ledger=[],
+        ledger=ledger or [],
     )
 
 
-def print_report(request: ReflectRequest, backend: str = "auto") -> int:
+def print_report(request: ReflectRequest, backend: str = "auto", blocked: set[str] | None = None) -> int:
     try:
         response = reflect(request, backend=backend)
     except ReflectorError as exc:
@@ -144,13 +147,22 @@ def print_report(request: ReflectRequest, backend: str = "auto") -> int:
         print("No suggestions this run (reflector unavailable).")
         return 0
 
-    if not response.suggestions:
+    suggestions = response.suggestions
+    if blocked:
+        # Belt and braces: the ledger summary already tells the model
+        # which fix_ids are dismissed/accepted, but the model can still
+        # echo one back — filter it out here so a dismissed suggestion
+        # can never resurface in the report (README's "NEVER re-suggested"
+        # promise).
+        suggestions = [s for s in suggestions if s.fix_id not in blocked]
+
+    if not suggestions:
         print("No suggestions this run — nothing cleared the confidence bar. Silence is correct.")
         return 0
 
     sessions_scanned = request.signals.get("sessions_scanned", 0)
     print(f"Vidura friction report — {sessions_scanned} sessions scanned\n")
-    for suggestion in response.suggestions:
+    for suggestion in suggestions:
         print(f"- [{suggestion.fix_id}] confidence={suggestion.confidence:.2f}")
         print(f"  {suggestion.blunt_summary}")
         for quote in suggestion.evidence:
@@ -165,8 +177,14 @@ def main() -> int:
     if not sessions:
         print("No Claude Code sessions found in the last 30 days.")
         return 0
-    request = build_report_request(sessions)
-    return print_report(request, backend=backend)
+    conn = open_db()
+    try:
+        ledger = ledger_summary_for_prompt(conn)
+        request = build_report_request(sessions, ledger=ledger)
+        blocked = blocked_fix_ids(conn)
+        return print_report(request, backend=backend, blocked=blocked)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
