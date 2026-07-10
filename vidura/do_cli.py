@@ -31,6 +31,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vidura-do")
     parser.add_argument("id", type=int)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Skip the TTY confirmation prompt. FOR UI CALLERS ONLY (e.g. the "
+            "menu-bar pet) that have already shown the exact action and "
+            "obtained explicit user confirmation themselves. --dry-run still "
+            "wins over --yes. Every other gate (accept status, kill switch, "
+            "audit, tiers) is unchanged."
+        ),
+    )
     args = parser.parse_args(argv)
 
     conn = open_db()
@@ -58,8 +69,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
+        confirm = (lambda _: True) if args.yes else _tty_confirm
         try:
-            status = execute_action(conn, row, fix, confirm=_tty_confirm, dry_run=args.dry_run)
+            status = execute_action(conn, row, fix, confirm=confirm, dry_run=args.dry_run)
         except ExecutionDeclined as e:
             print(str(e), file=sys.stderr)
             return 2

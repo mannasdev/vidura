@@ -84,3 +84,60 @@ def test_failed_execution_exits_three(tmp_path, monkeypatch, capsys):
     assert rc == 3
     out = capsys.readouterr().out
     assert "failed" in out.lower()
+
+
+def test_yes_flag_executes_copy_without_confirm_prompt(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
+    with patch("vidura.do_cli._tty_confirm") as mock_confirm:
+        with patch("vidura.executor.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            rc = main(["1", "--yes"])
+        mock_confirm.assert_not_called()
+    assert rc == 0
+    assert "done" in capsys.readouterr().out.lower()
+
+
+def test_yes_flag_bypasses_confirm_for_tier2_write(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _seed(tmp_path, monkeypatch, fix_id="missing-claude-md", status="accepted")
+    with patch("vidura.do_cli._tty_confirm") as mock_confirm:
+        rc = main(["1", "--yes"])
+        mock_confirm.assert_not_called()
+    assert rc == 0
+    assert (tmp_path / "CLAUDE.md").exists()
+
+
+def test_yes_plus_kill_switch_still_refuses_tier2(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VIDURA_EXECUTION", "off")
+    _seed(tmp_path, monkeypatch, fix_id="missing-claude-md", status="accepted")
+    rc = main(["1", "--yes"])
+    assert rc == 1
+    assert "disabled" in capsys.readouterr().err.lower()
+
+
+def test_dry_run_wins_over_yes(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        rc = main(["1", "--yes", "--dry-run"])
+        mock_run.assert_not_called()
+    assert rc == 0
+    assert "dry-run" in capsys.readouterr().out.lower()
+
+
+def test_yes_flag_recorded_as_normal_done_audit(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    db, row_id = _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        rc = main([str(row_id), "--yes"])
+    assert rc == 0
+    conn = open_db(db)
+    from vidura.store import executions_for
+
+    audits = executions_for(conn, row_id)
+    conn.close()
+    assert len(audits) == 1
+    assert audits[0]["status"] == "done"
