@@ -125,6 +125,12 @@ def call_claude_cli(
     installed and authenticated — zero new setup, frontier-class judgment.
     Privacy note: the chunks are excerpts of conversations already held
     with Claude, and they pass the redaction gate first regardless.
+
+    The prompt embeds attacker-influenceable third-party text (session
+    transcripts) verbatim, so this headless invocation is hardened:
+    --max-turns 1 (no multi-turn agentic loop) and --disallowedTools *
+    (no tool use at all) — a prompt-injected instruction inside a
+    transcript must not be able to make the reflector act.
     """
     claude_bin = shutil.which("claude")
     if claude_bin is None:
@@ -132,7 +138,18 @@ def call_claude_cli(
     CLAUDE_CLI_CWD.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.run(
-            [claude_bin, "-p", "--output-format", "json", "--model", model],
+            [
+                claude_bin,
+                "-p",
+                "--output-format",
+                "json",
+                "--model",
+                model,
+                "--max-turns",
+                "1",
+                "--disallowedTools",
+                "*",
+            ],
             input=prompt,
             capture_output=True,
             text=True,
@@ -213,7 +230,9 @@ def parse_suggestions(
                 novel=fix_id is None,
             )
         )
-    return suggestions
+    # Contract caps suggestions at 3 (SYSTEM_PROMPT/CLOSING_INSTRUCTION ask
+    # the model to self-limit, but that's a request, not a guarantee).
+    return suggestions[:3]
 
 
 def resolve_backend(backend: str = "auto") -> str:

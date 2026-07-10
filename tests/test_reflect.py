@@ -62,6 +62,15 @@ def test_parse_suggestions_raises_on_non_array():
         parse_suggestions(json.dumps({"not": "an array"}), {})
 
 
+def test_parse_suggestions_caps_at_three():
+    raw = json.dumps([
+        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": ["q"], "blunt_summary": "s"}
+        for _ in range(5)
+    ])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 3
+
+
 def test_reflect_returns_suggestions_from_mocked_ollama():
     mock_response = json.dumps([
         {"fix_id": "judge-executor-split", "confidence": 0.85, "evidence": ["you re-prompted 3x"], "blunt_summary": "split judge/executor"}
@@ -124,6 +133,20 @@ def test_call_claude_cli_extracts_result_from_envelope():
     with patch("vidura.reflect.shutil.which", return_value="/usr/local/bin/claude"), \
          patch("vidura.reflect.subprocess.run", return_value=proc):
         assert call_claude_cli("prompt") == '{"suggestions": []}'
+
+
+def test_call_claude_cli_restricts_tools_and_turns():
+    from vidura.reflect import call_claude_cli
+    envelope = json.dumps({"result": '{"suggestions": []}', "session_id": "x"})
+    proc = MagicMock(returncode=0, stdout=envelope, stderr="")
+    with patch("vidura.reflect.shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("vidura.reflect.subprocess.run", return_value=proc) as mock_run:
+        call_claude_cli("prompt")
+    argv = mock_run.call_args[0][0]
+    assert "--max-turns" in argv
+    assert argv[argv.index("--max-turns") + 1] == "1"
+    assert "--disallowedTools" in argv
+    assert argv[argv.index("--disallowedTools") + 1] == "*"
 
 
 def _mock_urlopen(body_bytes):
