@@ -37,7 +37,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            button.image = Self.menuBarImage()
+            button.image = Self.menuBarImage(withBadge: false)
             button.target = self
             button.action = #selector(togglePanel(_:))
         }
@@ -53,10 +53,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         removeOutsideClickMonitor()
     }
 
-    /// The menu bar mark is fixed — it does not change per mood. The
-    /// ONLY thing this observes is the STIRRING transition, to show a
-    /// small "•" badge on the status item title. No other mood touches
-    /// the menu bar at all.
+    /// The menu bar mark's silhouette is fixed — it does not change per
+    /// mood. The ONLY thing this observes is the STIRRING transition, to
+    /// show or hide the small accent-colored badge dot at the glyph's
+    /// top-right corner (spec §4: "the badge dot only appears when
+    /// Vidura has counsel waiting"). No other mood touches the menu bar.
     private func observeMood() {
         moodCancellable = state.$mood
             .map { $0?.mood }
@@ -70,31 +71,72 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateBadge(for moodRaw: String) {
         guard let button = statusItem?.button else { return }
         let isStirring = moodRaw == Mood.stirring.rawValue
-        button.title = isStirring ? "\u{2022}" : ""
-        button.imagePosition = isStirring ? .imageLeading : .imageOnly
+        button.image = Self.menuBarImage(withBadge: isStirring)
         button.setAccessibilityLabel(isStirring ? "Vidura — stirring" : "Vidura")
     }
 
-    /// One fixed menu-bar mark: a plain SF Symbol, template mode so it
-    /// tints for light/dark menu bars. Falls back to a drawn dot if the
-    /// symbol is unavailable — the image must never be nil or a crowded
-    /// menu bar renders an empty, unclickable item.
-    private static func menuBarImage() -> NSImage {
-        if let symbol = NSImage(
-            systemSymbolName: "moon.zzz",
-            accessibilityDescription: "Vidura"
-        ) {
-            symbol.isTemplate = true
-            return symbol
-        }
-        let fallback = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(ovalIn: rect.insetBy(dx: 5, dy: 5)).fill()
+    /// The menu-bar mark glyph (spec §4): a small pixel-style rounded
+    /// head silhouette with two rectangular eyes, matching the
+    /// character's face in miniature, drawn in template mode so AppKit
+    /// tints it correctly for light/dark menu bars. `withBadge` adds the
+    /// spec's 5×5 accent-colored dot at the top-right corner — the
+    /// menu-bar-level equivalent of the in-panel STIRRING mood, and the
+    /// only state this glyph ever varies by. Static image swap only, no
+    /// animation.
+    ///
+    /// The badge dot is drawn as a fixed non-template accent color
+    /// rather than participating in template tinting — the spec calls
+    /// it out as a colored (not monochrome) indicator in both themes.
+    static func menuBarImage(withBadge: Bool) -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let inkColor = NSColor.black // template mode remaps this
+            inkColor.setStroke()
+            inkColor.setFill()
+
+            // Rounded head silhouette (bun/ears nub + rounded body),
+            // approximated as a rounded rect with a small notch on top.
+            let headRect = rect.insetBy(dx: 3, dy: 2.5)
+            let headPath = NSBezierPath(roundedRect: headRect, xRadius: 5, yRadius: 5)
+            headPath.lineWidth = 1.4
+            headPath.stroke()
+
+            // Ears/"bun" nub.
+            let nubRect = NSRect(x: rect.midX - 1.5, y: headRect.maxY - 1, width: 3, height: 3)
+            NSBezierPath(roundedRect: nubRect, xRadius: 1, yRadius: 1).fill()
+
+            // Two rectangular eye slits.
+            let eyeWidth: CGFloat = 2.4
+            let eyeHeight: CGFloat = 1.4
+            let eyeY = headRect.midY - eyeHeight / 2
+            NSBezierPath(
+                rect: NSRect(x: headRect.midX - 3.6, y: eyeY, width: eyeWidth, height: eyeHeight)
+            ).fill()
+            NSBezierPath(
+                rect: NSRect(x: headRect.midX + 1.2, y: eyeY, width: eyeWidth, height: eyeHeight)
+            ).fill()
+
             return true
         }
-        fallback.isTemplate = true
-        fallback.accessibilityDescription = "Vidura"
-        return fallback
+        image.isTemplate = true
+
+        guard withBadge else {
+            image.accessibilityDescription = "Vidura"
+            return image
+        }
+
+        // Compose the accent badge dot on top as a second, non-template
+        // layer so it keeps its color instead of being flattened to the
+        // template tint.
+        let composed = NSImage(size: size)
+        composed.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: size))
+        NSColor(srgbRed: 0xB4 / 255, green: 0x53 / 255, blue: 0x09 / 255, alpha: 1).setFill()
+        NSBezierPath(ovalIn: NSRect(x: size.width - 6, y: size.height - 6, width: 5, height: 5)).fill()
+        composed.unlockFocus()
+        composed.isTemplate = false
+        composed.accessibilityDescription = "Vidura — stirring"
+        return composed
     }
 
     @objc private func togglePanel(_ sender: AnyObject?) {
@@ -195,15 +237,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Width fixed, height free — the panel takes its height from
         // this view's fitting size (positionPanel), so the content is
-        // never floating in a fixed-height void.
+        // never floating in a fixed-height void. CardView itself now
+        // draws the panel's opaque bg-panel background, border, and
+        // 14pt corner radius per the design spec's exact solid tokens
+        // (§1.1) — no extra chrome layered on top here.
         let content = CardView(state: state)
             .frame(width: Self.panelWidth)
             .fixedSize(horizontal: false, vertical: true)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-            )
         panel.contentViewController = NSHostingController(rootView: content)
         return panel
     }

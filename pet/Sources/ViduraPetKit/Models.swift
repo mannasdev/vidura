@@ -72,6 +72,40 @@ public enum Mood: String {
     /// PixelPet.swift.
 }
 
+/// Accepted/dismissed counts for the footer's "Last counsel · …" line
+/// (spec §2.3 shows only relative time, but the task brief asks the
+/// footer to also carry a counts summary derived from the full ledger).
+/// Pure struct + pure derivation function so the counting logic can be
+/// unit-tested without any live CLI call — `StateModel` just filters
+/// `vidura-ledger list --json`'s full (unfiltered) result through this.
+public struct LedgerCounts: Equatable {
+    public let accepted: Int
+    public let dismissed: Int
+
+    public init(accepted: Int, dismissed: Int) {
+        self.accepted = accepted
+        self.dismissed = dismissed
+    }
+
+    /// Derives counts from the full ledger (all statuses), not just the
+    /// pending subset `StateModel.entries` holds for display. Unknown/
+    /// future status strings are simply not counted as either bucket —
+    /// this must never crash on a status the Swift side doesn't yet
+    /// know about.
+    public static func derive(from allEntries: [LedgerEntry]) -> LedgerCounts {
+        var accepted = 0
+        var dismissed = 0
+        for entry in allEntries {
+            switch entry.status {
+            case "accepted": accepted += 1
+            case "dismissed": dismissed += 1
+            default: break
+            }
+        }
+        return LedgerCounts(accepted: accepted, dismissed: dismissed)
+    }
+}
+
 /// Mirrors one row of `vidura-ledger list --json` (Task 1's enriched
 /// ledger entry: has_action/action_label consulted from the fix index
 /// on the Python side so this app never needs its own copy of it).

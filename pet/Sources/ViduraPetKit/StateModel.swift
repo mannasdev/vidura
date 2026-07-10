@@ -10,6 +10,7 @@ import AppKit
 public final class StateModel: ObservableObject {
     @Published private(set) var mood: MoodState?
     @Published private(set) var entries: [LedgerEntry] = []
+    @Published private(set) var counts: LedgerCounts = LedgerCounts(accepted: 0, dismissed: 0)
     @Published private(set) var lastError: String?
     /// Set once per STIRRING transition so the popover can show the
     /// "counsel earned" framing even if the user opens it before the
@@ -39,6 +40,7 @@ public final class StateModel: ObservableObject {
     public init(preview entries: [LedgerEntry], mood: MoodState?) {
         self.entries = entries
         self.mood = mood
+        self.counts = LedgerCounts.derive(from: entries)
     }
 
     public func start() {
@@ -99,8 +101,13 @@ public final class StateModel: ObservableObject {
                 lastError = result.stderr.isEmpty ? "vidura-ledger exited \(result.exitCode)" : result.stderr
                 return
             }
+            // `vidura-ledger list --json` returns ALL entries regardless
+            // of status — `entries` (pending, shown as cards) and
+            // `counts` (accepted/dismissed, shown in the footer) are both
+            // derived from this one unfiltered decode.
             let decoded = try JSONDecoder().decode([LedgerEntry].self, from: Data(result.stdout.utf8))
             entries = decoded.filter { $0.status == "pending" }
+            counts = LedgerCounts.derive(from: decoded)
         } catch let error as ViduraCore.CoreError {
             lastError = Self.friendlyMessage(for: error)
         } catch {

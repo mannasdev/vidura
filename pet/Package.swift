@@ -9,7 +9,10 @@ let package = Package(
     targets: [
         .target(
             name: "ViduraPetKit",
-            path: "Sources/ViduraPetKit"
+            path: "Sources/ViduraPetKit",
+            resources: [
+                .copy("Resources")
+            ]
         ),
         .executableTarget(
             name: "ViduraPet",
