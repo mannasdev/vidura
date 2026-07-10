@@ -1,5 +1,5 @@
 # Vidura — one-command setup (the "stranger in 10 minutes" criterion)
-.PHONY: install test report sweep
+.PHONY: install test test-pet report sweep
 
 install:
 	python3.11 -m venv .venv || python3 -m venv .venv
@@ -8,6 +8,10 @@ install:
 
 test:
 	.venv/bin/pytest -q
+	$(MAKE) test-pet
+
+test-pet:
+	cd pet && swift test
 
 report:
 	.venv/bin/vidura-report

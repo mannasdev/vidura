@@ -5,13 +5,13 @@ import Foundation
 /// every mutation goes through one of vidura-state / vidura-ledger /
 /// vidura-do, exactly like a human at a terminal. This is the ONLY
 /// file that knows how those binaries are found and invoked.
-enum ViduraCore {
+public enum ViduraCore {
 
     /// One CLI invocation's outcome: exit code plus captured stdout/stderr.
-    struct Result {
-        let exitCode: Int32
-        let stdout: String
-        let stderr: String
+    public struct Result {
+        public let exitCode: Int32
+        public let stdout: String
+        public let stderr: String
     }
 
     enum CoreError: Error {

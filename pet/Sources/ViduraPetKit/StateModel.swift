@@ -7,7 +7,7 @@ import AppKit
 /// no timer in this file fires faster than 60s, and the STIRRING
 /// notification fires exactly once per transition into that mood.
 @MainActor
-final class StateModel: ObservableObject {
+public final class StateModel: ObservableObject {
     @Published private(set) var mood: MoodState?
     @Published private(set) var entries: [LedgerEntry] = []
     @Published private(set) var lastError: String?
@@ -24,15 +24,24 @@ final class StateModel: ObservableObject {
 
     /// Poll interval: 60s minimum per the plan's anti-Clippy invariant
     /// ("no timers faster than 60s"). Do not lower this.
-    static let pollInterval: TimeInterval = 60
+    public static let pollInterval: TimeInterval = 60
     /// Ambient sweep interval: 30 minutes, per the plan.
-    static let sweepInterval: TimeInterval = 30 * 60
+    public static let sweepInterval: TimeInterval = 30 * 60
 
-    init() {
+    public init() {
         requestNotificationAuthorization()
     }
 
-    func start() {
+    /// Test-only seeding hook: builds a StateModel with fixed entries and
+    /// mood, and skips notification-authorization requests (which throw
+    /// outside a real app bundle). Used by ContentSizingTests to measure
+    /// CardView's fitting size without any CLI calls or live process.
+    public init(preview entries: [LedgerEntry], mood: MoodState?) {
+        self.entries = entries
+        self.mood = mood
+    }
+
+    public func start() {
         refresh()
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
@@ -44,7 +53,7 @@ final class StateModel: ObservableObject {
         }
     }
 
-    func stop() {
+    public func stop() {
         pollTimer?.invalidate()
         pollTimer = nil
         sweepTimer?.invalidate()
@@ -56,7 +65,7 @@ final class StateModel: ObservableObject {
     /// Guarded against overlap: the popover-open refresh and the 60s
     /// timer can otherwise fire close together and race, which used to
     /// let the STIRRING transition's notification double-fire.
-    func refresh() {
+    public func refresh() {
         guard !refreshInFlight else { return }
         refreshInFlight = true
         Task {
@@ -114,11 +123,12 @@ final class StateModel: ObservableObject {
     /// Applies a freshly-decoded mood, firing the ONE notification the
     /// whole app ever sends: the ASLEEP/CONTENT/etc. -> STIRRING
     /// transition. Staying in STIRRING (or re-entering it on a later
-    /// poll without ever having left) never re-fires it.
+    /// poll without ever having left) never re-fires it. The actual
+    /// transition decision lives in `MoodTransition.shouldNotify` so it
+    /// can be unit-tested without a running StateModel.
     private func applyNewMood(_ new: MoodState) {
-        let wasStirring = (previousMood == Mood.stirring.rawValue)
         let isStirring = (new.mood == Mood.stirring.rawValue)
-        if isStirring && !wasStirring {
+        if MoodTransition.shouldNotify(previous: previousMood, current: new.mood) {
             justEnteredStirring = true
             fireStirringNotification(pendingCount: new.pendingCount)
         } else if !isStirring {
@@ -169,7 +179,7 @@ final class StateModel: ObservableObject {
     /// Runs vidura-sweep in the background at .utility QoS every 30
     /// minutes. Skips if one is already in flight so overlapping sweeps
     /// never stack up.
-    func runAmbientSweep() {
+    public func runAmbientSweep() {
         guard !sweepInFlight else { return }
         sweepInFlight = true
         Task {
@@ -186,17 +196,17 @@ final class StateModel: ObservableObject {
 
     // MARK: - Ledger actions (called from CardView)
 
-    func accept(_ id: Int) async {
+    public func accept(_ id: Int) async {
         _ = try? await ViduraCore.runAsync("vidura-ledger", arguments: ["accept", String(id)])
         refresh()
     }
 
-    func dismiss(_ id: Int) async {
+    public func dismiss(_ id: Int) async {
         _ = try? await ViduraCore.runAsync("vidura-ledger", arguments: ["dismiss", String(id)])
         refresh()
     }
 
-    func celebrate(_ id: Int) async {
+    public func celebrate(_ id: Int) async {
         _ = try? await ViduraCore.runAsync("vidura-ledger", arguments: ["celebrate", String(id)])
         refresh()
     }
@@ -207,7 +217,7 @@ final class StateModel: ObservableObject {
     /// nonzero exit, empty output, a thrown/timed-out/missing-binary
     /// error — is surfaced as a hard failure so the sheet never offers a
     /// live Confirm button over a preview that isn't real.
-    func doDryRun(_ id: Int) async -> DryRunOutcome {
+    public func doDryRun(_ id: Int) async -> DryRunOutcome {
         do {
             let result = try await ViduraCore.runAsync("vidura-do", arguments: [String(id), "--dry-run"])
             guard result.exitCode == 0 else {
@@ -229,7 +239,7 @@ final class StateModel: ObservableObject {
     /// (from doDryRun's output) and the user tapped Confirm — --yes is
     /// safe here per Task 1's contract because that confirmation just
     /// happened in this UI.
-    func doConfirmed(_ id: Int) async -> ViduraCore.Result? {
+    public func doConfirmed(_ id: Int) async -> ViduraCore.Result? {
         let result = try? await ViduraCore.runAsync("vidura-do", arguments: [String(id), "--yes"])
         refresh()
         return result

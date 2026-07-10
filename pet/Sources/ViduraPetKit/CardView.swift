@@ -4,12 +4,16 @@ import SwiftUI
 /// Deliberately undecorated — no animation, no mascot, no cheerful
 /// copy beyond what the Python core itself writes (blunt_summary is
 /// already the whole voice of the app; this view just lays it out).
-struct CardView: View {
+public struct CardView: View {
     @ObservedObject var state: StateModel
 
     @State private var pendingDoAction: DoSheetContext?
 
-    var body: some View {
+    public init(state: StateModel) {
+        self.state = state
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
 

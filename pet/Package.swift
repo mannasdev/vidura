@@ -7,9 +7,19 @@ let package = Package(
         .macOS(.v13)
     ],
     targets: [
+        .target(
+            name: "ViduraPetKit",
+            path: "Sources/ViduraPetKit"
+        ),
         .executableTarget(
             name: "ViduraPet",
+            dependencies: ["ViduraPetKit"],
             path: "Sources/ViduraPet"
+        ),
+        .testTarget(
+            name: "ViduraPetKitTests",
+            dependencies: ["ViduraPetKit"],
+            path: "Tests/ViduraPetKitTests"
         )
     ]
 )
