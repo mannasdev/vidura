@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 360, height: 480)
+        popover.contentSize = NSSize(width: 400, height: 480)
         popover.contentViewController = NSHostingController(rootView: CardView(state: state))
         self.popover = popover
 

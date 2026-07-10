@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The popover's content: pending suggestions as plain, blunt cards.
+/// The popover's content: pending suggestions as quiet, restrained cards.
 /// Deliberately undecorated — no animation, no mascot, no cheerful
 /// copy beyond what the Python core itself writes (blunt_summary is
 /// already the whole voice of the app; this view just lays it out).
@@ -13,21 +13,15 @@ struct CardView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
-            if let lastError = state.lastError {
-                errorBanner(lastError)
-            }
-
-            if !state.entries.isEmpty || !celebratableIds.isEmpty {
+            if !celebratableIds.isEmpty {
                 celebrationBanner
             }
-
-            Divider()
 
             if state.entries.isEmpty {
                 emptyState
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
                         ForEach(state.entries) { entry in
                             EntryRow(entry: entry, state: state) { context in
                                 pendingDoAction = context
@@ -38,8 +32,12 @@ struct CardView: View {
                 }
                 .frame(maxHeight: 420)
             }
+
+            if let lastError = state.lastError {
+                errorLine(lastError)
+            }
         }
-        .frame(width: 360)
+        .frame(width: 400)
         .sheet(item: $pendingDoAction) { context in
             DoConfirmSheet(context: context, state: state)
         }
@@ -51,49 +49,70 @@ struct CardView: View {
     }
 
     private var header: some View {
-        HStack {
-            Text("Vidura")
-                .font(.headline)
-            Spacer()
-            if let mood = state.mood?.mood {
-                Text(mood.capitalized)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: state.mood.map { Mood(rawValue: $0.mood)?.symbolName ?? Mood.asleep.symbolName } ?? Mood.asleep.symbolName)
+                    .foregroundStyle(.mint)
+                    .font(.callout)
+                Text("Vidura")
+                    .font(.headline)
+                Spacer()
+                if let mood = state.mood?.mood {
+                    Text(mood.capitalized)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(12)
+            Divider()
         }
-        .padding(12)
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        Text(message)
-            .font(.caption)
-            .foregroundStyle(.red)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
     }
 
     @ViewBuilder
     private var celebrationBanner: some View {
         if let firstId = celebratableIds.first {
-            HStack {
-                Text("A suggestion you adopted has paid off.")
+            HStack(spacing: 8) {
+                Image(systemName: "star.circle")
+                    .foregroundStyle(.secondary)
+                Text("Advice adopted — behavior changed.")
                     .font(.caption)
                 Spacer()
                 Button("Nice") {
                     Task { await state.celebrate(firstId) }
                 }
                 .font(.caption)
+                .controlSize(.small)
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .padding(.vertical, 8)
         }
     }
 
+    private func errorLine(_ message: String) -> some View {
+        // Quiet by default — only the CLIs-entirely-missing case (the one
+        // failure mode that means the pet cannot function at all) earns
+        // an alarming color; every other error stays secondary.
+        Text(message)
+            .font(.caption2)
+            .foregroundStyle(message.contains("CLIs not found") ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+    }
+
     private var emptyState: some View {
-        Text("Nothing pending. The pet is resting.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(16)
+        VStack(spacing: 6) {
+            Image(systemName: "moon.zzz")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("Nothing earned.")
+                .font(.callout)
+            Text("Silence is correct.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .padding(.horizontal, 16)
     }
 }
 
@@ -113,45 +132,64 @@ private struct EntryRow: View {
     let onDo: (DoSheetContext) -> Void
 
     @State private var isStartingDo = false
+    @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(entry.bluntSummary)
-                .font(.body)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
                 Text(entry.fixId)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(String(format: "confidence %.2f", entry.confidence))
-                    .font(.caption2)
+                    .font(.system(.caption2, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.tertiary.opacity(0.5), in: Capsule())
+                Spacer()
+                Text(String(format: "%.0f%%", entry.confidence * 100))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Text(entry.bluntSummary)
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .lineLimit(isExpanded ? nil : 4)
+                .fixedSize(horizontal: false, vertical: true)
+                .onTapGesture { isExpanded.toggle() }
 
             ForEach(entry.evidence.prefix(2), id: \.self) { quote in
-                Text(quote)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(.tertiary)
+                        .frame(width: 2)
+                    Text(truncatedQuote(quote))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            HStack {
-                Button("Accept") { Task { await state.accept(entry.id) } }
+            HStack(spacing: 8) {
+                Spacer()
                 Button("Dismiss") { Task { await state.dismiss(entry.id) } }
+                    .buttonStyle(.bordered)
+                Button("Accept") { Task { await state.accept(entry.id) } }
+                    .buttonStyle(.borderedProminent)
                 if entry.hasAction {
-                    Spacer()
-                    Button(entry.actionLabel ?? "Do") {
+                    Button("Do — \(entry.actionLabel ?? "Run")") {
                         startDo()
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(isStartingDo)
                 }
             }
-            .font(.caption)
+            .controlSize(.small)
         }
-        .padding(10)
-        .background(Color.gray.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func truncatedQuote(_ quote: String) -> String {
+        let limit = 140
+        guard quote.count > limit else { return quote }
+        return String(quote.prefix(limit)) + "\u{2026}"
     }
 
     private func startDo() {
@@ -188,8 +226,7 @@ private struct DoConfirmSheet: View {
                 }
                 .frame(maxHeight: 160)
                 .padding(8)
-                .background(Color.gray.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
 
                 if let resultText {
                     Text(resultText)
