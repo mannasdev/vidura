@@ -34,6 +34,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vidura-reflect: invalid JSON on stdin: {exc}", file=sys.stderr)
         return 2
 
+    if not isinstance(payload, dict):
+        print(f"vidura-reflect: expected a JSON object on stdin, got {type(payload).__name__}", file=sys.stderr)
+        return 2
+
     try:
         validate_contract_version(payload)
     except ContractVersionMismatch as exc:

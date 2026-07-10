@@ -46,6 +46,14 @@ def test_invalid_json_on_stdin_fails_loudly(monkeypatch, capsys):
     assert exit_code == 2
 
 
+def test_non_object_json_on_stdin_fails_loudly(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(["not", "an", "object"])))
+    exit_code = main()
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "expected a JSON object" in err
+
+
 def test_reflector_error_degrades_to_silence(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(_valid_payload())))
     with patch("vidura.cli.reflect", side_effect=ReflectorError("ollama down")):
