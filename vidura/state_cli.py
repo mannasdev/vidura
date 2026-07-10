@@ -13,12 +13,12 @@ so consumers never have to guess which keys exist.
 
 import json
 import sys
+from datetime import datetime, timezone
 
 from vidura.mood import compute_mood
 from vidura.store import current_character, open_db
 
 DEFAULT_CHARACTER = "face"
-DEFAULT_CHARACTER_SINCE = "now"
 DEFAULT_CHARACTER_REASON = "still getting to know you"
 
 
@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
     if row is None:
         result["character"] = DEFAULT_CHARACTER
-        result["character_since"] = DEFAULT_CHARACTER_SINCE
+        result["character_since"] = datetime.now(timezone.utc).isoformat()
         result["character_reason"] = DEFAULT_CHARACTER_REASON
     else:
         result["character"] = row["character"]

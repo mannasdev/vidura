@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 from vidura.state_cli import main
 from vidura.store import open_db, record_character, record_suggestion
@@ -51,13 +52,17 @@ def test_cli_defaults_character_when_no_history(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("VIDURA_DB_PATH", str(db))
     open_db(db).close()
 
+    before = datetime.now(timezone.utc)
     exit_code = main([])
+    after = datetime.now(timezone.utc)
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["character"] == "face"
-    assert payload["character_since"] == "now"
     assert payload["character_reason"] == "still getting to know you"
+    # character_since must be a real ISO-8601 timestamp, not a sentinel
+    since = datetime.fromisoformat(payload["character_since"])
+    assert before <= since <= after
 
 
 def test_cli_reflects_recorded_character(tmp_path, monkeypatch, capsys):
