@@ -18,7 +18,15 @@ REDACTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # gets its value redacted by llm_key_sk first; the (?!\[REDACTED\])
     # guard stops this pattern from then re-swallowing that placeholder
     # together with the `OPENAI_KEY=` prefix.
-    ("env_secret", re.compile(r"\b[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET)\s*=\s*(?!\[REDACTED\])\S+")),
+    # Case-insensitive: `my_api_key=...` and `Stripe_Secret=...` are just
+    # as real a leak as `STRIPE_SECRET=...` and must be caught too.
+    (
+        "env_secret",
+        re.compile(
+            r"\b[A-Za-z][A-Za-z0-9_]*(?:_KEY|_TOKEN|_SECRET)\s*=\s*(?!\[REDACTED\])\S+",
+            re.IGNORECASE,
+        ),
+    ),
 ]
 
 

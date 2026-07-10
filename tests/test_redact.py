@@ -29,3 +29,23 @@ def test_passthrough_for_non_matching_text():
 
 def test_empty_string_passthrough():
     assert redact("") == ""
+
+
+def test_redacts_lowercase_env_secret():
+    result = redact("my_api_key=secret123")
+    assert "secret123" not in result
+    assert "[REDACTED]" in result
+
+
+def test_redacts_mixed_case_env_secret():
+    result = redact("Stripe_Secret=abc")
+    assert "abc" not in result
+    assert "[REDACTED]" in result
+
+
+def test_redacts_multiple_secrets_in_one_string():
+    text = "key is AKIAABCDEFGHIJKLMNOP and Authorization: Bearer abc123.XYZ-_token"
+    result = redact(text)
+    assert "AKIAABCDEFGHIJKLMNOP" not in result
+    assert "abc123.XYZ-_token" not in result
+    assert result.count("[REDACTED]") == 2

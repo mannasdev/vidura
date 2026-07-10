@@ -18,6 +18,7 @@ rest of an otherwise-readable session.
 """
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -77,7 +78,7 @@ def parse_session(path: Path) -> Iterator[Turn]:
             try:
                 record = json.loads(raw_line)
             except json.JSONDecodeError:
-                print(f"vidura: skipping malformed line {line_num} in {path}")
+                print(f"vidura: skipping malformed line {line_num} in {path}", file=sys.stderr)
                 continue
 
             record_type = record.get("type")

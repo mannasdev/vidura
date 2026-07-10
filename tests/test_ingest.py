@@ -74,7 +74,7 @@ def test_skips_malformed_line_and_continues(tmp_path, capsys):
     turns = list(parse_session(path))
     assert [t.text for t in turns] == ["first", "second"]
     captured = capsys.readouterr()
-    assert "skipping malformed line 2" in captured.out
+    assert "skipping malformed line 2" in captured.err
 
 
 def test_skips_non_user_assistant_record_types(tmp_path):
