@@ -1,0 +1,63 @@
+"""vidura-reflect: the subprocess entrypoint (Approach C).
+
+stdin: JSON ReflectRequest. stdout: JSON ReflectResponse.
+
+Contract version mismatch and unparseable stdin both fail LOUDLY
+(non-zero exit, stderr message) — these are caller-side bugs, not
+judgment-unavailable cases, so they must NOT degrade to silence.
+
+Every reflector failure (Ollama unreachable, timeout, malformed model
+output) degrades to silence per design doc Premise #4: empty
+suggestions list, exit 0.
+"""
+
+import json
+import sys
+
+from vidura.contract import (
+    CONTRACT_VERSION,
+    ContractVersionMismatch,
+    ReflectRequest,
+    ReflectResponse,
+    enforce_payload_budget,
+    validate_contract_version,
+)
+from vidura.reflect import ReflectorError, reflect
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_input = sys.stdin.read()
+
+    try:
+        payload = json.loads(raw_input)
+    except json.JSONDecodeError as exc:
+        print(f"vidura-reflect: invalid JSON on stdin: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        validate_contract_version(payload)
+    except ContractVersionMismatch as exc:
+        print(f"vidura-reflect: {exc}", file=sys.stderr)
+        return 2
+
+    chunks = enforce_payload_budget(payload.get("chunks", []))
+    request = ReflectRequest(
+        contract_version=payload["contract_version"],
+        signals=payload.get("signals", {}),
+        chunks=chunks,
+        fix_index=payload.get("fix_index", []),
+        ledger=payload.get("ledger", []),
+    )
+
+    try:
+        response = reflect(request)
+    except ReflectorError as exc:
+        print(f"vidura-reflect: degrading to silence: {exc}", file=sys.stderr)
+        response = ReflectResponse(contract_version=CONTRACT_VERSION, suggestions=[])
+
+    print(json.dumps(response.to_json_dict()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
