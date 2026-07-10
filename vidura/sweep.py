@@ -8,6 +8,8 @@ marked reflected only when their batch succeeds, so an interrupted
 sweep (session limit, ctrl-C) resumes where it left off.
 """
 
+import argparse
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,9 +22,17 @@ from vidura.redact import redact
 from vidura.reflect import reflect
 from vidura.report import CLAUDE_PROJECTS_DIR, DEFAULT_WINDOW_DAYS, find_recent_sessions
 from vidura.signals import extract_signals
-from vidura.store import ledger_summary_for_prompt, mark_reflected, needs_reflection, record_suggestion
+from vidura.store import (
+    ledger_entries,
+    ledger_summary_for_prompt,
+    mark_reflected,
+    needs_reflection,
+    open_db,
+    record_suggestion,
+)
 
 PER_SESSION_CHUNK_BUDGET = 24000
+DEFAULT_MAX_BATCHES = 20
 
 
 @dataclass
@@ -139,3 +149,52 @@ def run_sweep(
         stats["batches_run"] += 1
         print(f"vidura sweep: batch {i}/{len(selected)} done ({len(batch)} sessions)", file=sys.stderr)
     return stats
+
+
+def _print_ledger_report(conn) -> None:
+    pending = ledger_entries(conn, status="pending")
+    if not pending:
+        print("No pending suggestions — nothing cleared the bar. Silence is correct.")
+        return
+    print(f"Vidura friction report — {len(pending)} pending suggestion(s)\n")
+    for row in pending:
+        print(f"[{row['id']}] [{row['fix_id']}] confidence={row['confidence']:.2f} seen_in={row['occurrences']} batch(es)")
+        print(f"    {row['blunt_summary']}")
+        import json as _json
+        for quote in _json.loads(row["evidence"]):
+            print(f"      > {quote}")
+        print()
+    print("Accept/dismiss with: vidura-ledger accept <id> | vidura-ledger dismiss <id>")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="vidura-sweep")
+    parser.add_argument("--full", action="store_true", help="run all batches (default: top %(default)s densest)")
+    parser.add_argument("--batches", type=int, default=DEFAULT_MAX_BATCHES)
+    parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
+    parser.add_argument("--backend", choices=["auto", "claude", "ollama"], default=os.environ.get("VIDURA_REFLECTOR_BACKEND", "auto"))
+    args = parser.parse_args(argv)
+
+    conn = open_db()
+    try:
+        work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days)
+        if not work:
+            print("Nothing new to sweep — all friction sessions already reflected.")
+            _print_ledger_report(conn)
+            return 0
+        batches = pack_batches(work)
+        max_batches = None if args.full else args.batches
+        stats = run_sweep(conn, batches, backend=args.backend, max_batches=max_batches)
+        print(
+            f"Sweep: {stats['batches_run']} batches run, {stats['batches_failed']} failed, "
+            f"{stats['sessions_reflected']} sessions reflected, "
+            f"{stats['suggestions_recorded']} suggestions recorded.\n"
+        )
+        _print_ledger_report(conn)
+        return 0
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

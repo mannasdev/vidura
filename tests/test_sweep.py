@@ -162,3 +162,39 @@ def test_sweep_passes_ledger_to_reflector(tmp_path):
     request = mock_reflect.call_args[0][0]
     assert any(e["fix_id"] == "repeated-error-loop" and e["status"] == "dismissed" for e in request.ledger)
     conn.close()
+
+
+from vidura.sweep import main
+
+
+def test_main_no_pending_work(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days: [])
+    exit_code = main([])
+    assert exit_code == 0
+    assert "Nothing new to sweep" in capsys.readouterr().out
+
+
+def test_main_runs_and_prints_report(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    work = [_work(tmp_path, "a.jsonl", streaks=3)]
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days: work)
+    with patch("vidura.sweep.reflect", return_value=_response()):
+        exit_code = main([])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "judge-executor-split" in out
+    assert "1 batches run" in out
+
+
+def test_main_batches_flag_caps(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    work = [_work(tmp_path, f"{i}.jsonl") for i in range(3)]
+    # force one batch per session by shrinking chunks? simpler: 3 sessions fit 1 batch;
+    # use --batches 0 is invalid; test --batches 1 with oversized sessions
+    for w in work:
+        w.chunks = ["x" * 40000]
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days: work)
+    with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
+        main(["--batches", "1"])
+    assert mock_reflect.call_count == 1

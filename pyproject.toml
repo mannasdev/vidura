@@ -11,6 +11,8 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 vidura-reflect = "vidura.cli:main"
 vidura-report = "vidura.report:main"
+vidura-sweep = "vidura.sweep:main"
+vidura-ledger = "vidura.ledger_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
