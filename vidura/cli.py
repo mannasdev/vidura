@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         chunks=chunks,
         fix_index=payload.get("fix_index", []),
         ledger=payload.get("ledger", []),
+        similar_past_friction=payload.get("similar_past_friction", []),
     )
 
     try:

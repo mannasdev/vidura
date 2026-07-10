@@ -70,3 +70,15 @@ def test_any_exception_degrades_to_silence(monkeypatch, capsys):
     assert exit_code == 0
     out = json.loads(capsys.readouterr().out)
     assert out["suggestions"] == []
+
+
+def test_similar_past_friction_passed_through_to_reflect(monkeypatch, capsys):
+    payload = _valid_payload()
+    payload["similar_past_friction"] = ["[user] we saw ENEEDAUTH before"]
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(payload)))
+    fake_response = ReflectResponse(contract_version=CONTRACT_VERSION, suggestions=[])
+    with patch("vidura.cli.reflect", return_value=fake_response) as mock_reflect:
+        exit_code = main()
+    assert exit_code == 0
+    request = mock_reflect.call_args[0][0]
+    assert request.similar_past_friction == ["[user] we saw ENEEDAUTH before"]

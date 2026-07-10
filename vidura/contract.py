@@ -37,6 +37,12 @@ class ReflectRequest:
     chunks: list[str]
     fix_index: list[dict[str, Any]]
     ledger: list[dict[str, Any]]
+    # Additive-fields policy: new ReflectRequest fields are appended here
+    # with a default, keeping CONTRACT_VERSION unchanged — existing
+    # positional/keyword constructions (callers, tests) keep working
+    # unmodified. Only a field REMOVAL or semantic change to an existing
+    # field bumps CONTRACT_VERSION.
+    similar_past_friction: list[str] = field(default_factory=list)
 
     def to_json_dict(self) -> dict[str, Any]:
         return asdict(self)

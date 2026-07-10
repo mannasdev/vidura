@@ -3,6 +3,7 @@ import pytest
 from vidura.contract import (
     CONTRACT_VERSION,
     ContractVersionMismatch,
+    ReflectRequest,
     enforce_payload_budget,
     validate_contract_version,
 )
@@ -38,3 +39,29 @@ def test_payload_budget_always_keeps_at_least_one_chunk():
     chunks = ["x" * 10000]
     result = enforce_payload_budget(chunks, budget_chars=10)
     assert result == chunks
+
+
+def test_reflect_request_similar_past_friction_defaults_to_empty_list():
+    request = ReflectRequest(
+        contract_version=CONTRACT_VERSION,
+        signals={},
+        chunks=[],
+        fix_index=[],
+        ledger=[],
+    )
+    assert request.similar_past_friction == []
+
+
+def test_reflect_request_to_json_dict_round_trips_similar_past_friction():
+    request = ReflectRequest(
+        contract_version=CONTRACT_VERSION,
+        signals={},
+        chunks=[],
+        fix_index=[],
+        ledger=[],
+        similar_past_friction=["[user] we saw this before"],
+    )
+    payload = request.to_json_dict()
+    assert payload["similar_past_friction"] == ["[user] we saw this before"]
+    round_tripped = ReflectRequest(**payload)
+    assert round_tripped.similar_past_friction == ["[user] we saw this before"]

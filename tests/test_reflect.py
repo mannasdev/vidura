@@ -218,3 +218,16 @@ def test_build_prompt_ends_with_closing_instruction():
     prompt = build_prompt(_request())
     assert prompt.rstrip().endswith('empty array if nothing clears the bar.')
     assert prompt.index("<recent_sessions>") < prompt.index("Remember: you are Vidura")
+
+
+def test_build_prompt_omits_past_friction_when_empty():
+    prompt = build_prompt(_request())
+    assert "<similar_past_friction>" not in prompt
+
+
+def test_build_prompt_renders_past_friction_between_sessions_and_fixes():
+    req = _request()
+    req.similar_past_friction = ["[user] we saw this ENEEDAUTH before"]
+    prompt = build_prompt(req)
+    assert prompt.index("<recent_sessions>") < prompt.index("<similar_past_friction>") < prompt.index("<fix_index>")
+    assert "ENEEDAUTH before" in prompt

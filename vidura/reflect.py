@@ -73,10 +73,15 @@ def build_prompt(request: ReflectRequest) -> str:
     ledger_text = json.dumps(request.ledger, indent=2)
     signals_text = json.dumps(request.signals, indent=2)
     chunks_text = "\n\n---\n\n".join(request.chunks)
+    past_friction_block = ""
+    if request.similar_past_friction:
+        past_friction_text = "\n\n---\n\n".join(request.similar_past_friction)
+        past_friction_block = f"<similar_past_friction>\n{past_friction_text}\n</similar_past_friction>\n\n"
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"<signals>\n{signals_text}\n</signals>\n\n"
         f"<recent_sessions>\n{chunks_text}\n</recent_sessions>\n\n"
+        f"{past_friction_block}"
         f"<fix_index>\n{fix_index_text}\n</fix_index>\n\n"
         f"<ledger>\n{ledger_text}\n</ledger>\n\n"
         f"{CLOSING_INSTRUCTION}\n"
