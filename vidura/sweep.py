@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from vidura.character import assign_character
 from vidura.chunk import chunk_turns
 from vidura.contract import CONTRACT_VERSION, PAYLOAD_BUDGET_CHARS, ReflectRequest
 from vidura.fix_index import load_fix_index
@@ -26,6 +27,7 @@ from vidura.report import CLAUDE_PROJECTS_DIR, DEFAULT_WINDOW_DAYS, find_recent_
 from vidura.signals import extract_signals
 from vidura.store import (
     _sanitize,
+    current_character,
     expire_stale_pending,
     ledger_entries,
     ledger_summary_for_prompt,
@@ -214,6 +216,21 @@ def run_sweep(
     return stats
 
 
+def _maybe_report_character_evolution(conn) -> None:
+    """Assign the pet's character for this run and, if it changed
+    (stickiness-permitting), tell the user on stderr — this is a status
+    line, not the ledger report, so it never touches stdout."""
+    before = current_character(conn)
+    before_name = before["character"] if before is not None else None
+    result = assign_character(conn)
+    if result["character"] != before_name:
+        old = before_name or "face"
+        print(
+            f"vidura sweep: your pet evolved — {old} -> {result['character']} ({result['reason']})",
+            file=sys.stderr,
+        )
+
+
 def _print_ledger_report(conn) -> None:
     pending = ledger_entries(conn, status="pending")
     if not pending:
@@ -258,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days, rescan=args.rescan)
         if not work:
             print("Nothing new to sweep — all friction sessions already reflected.")
+            _maybe_report_character_evolution(conn)
             _print_ledger_report(conn)
             return 0
         batches = pack_batches(work)
@@ -273,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Follow-through: [{fix_id}] adopted — behavior changed since you accepted it.")
             elif verdict == "lapsed":
                 print(f"Follow-through: [{fix_id}] lapsed — accepted 2+ weeks ago, behavior unchanged.")
+        _maybe_report_character_evolution(conn)
         _print_ledger_report(conn)
         return 0
     finally:

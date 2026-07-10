@@ -1,8 +1,20 @@
 import json
 
 from vidura.state_cli import main
-from vidura.store import open_db, record_suggestion
+from vidura.store import open_db, record_character, record_suggestion
 from tests.test_store import _sugg
+
+EXPECTED_KEYS = {
+    "mood",
+    "pending_count",
+    "adopted_uncelebrated_ids",
+    "streak_rate_7d",
+    "streak_rate_baseline",
+    "sessions_24h",
+    "character",
+    "character_since",
+    "character_reason",
+}
 
 
 def test_cli_prints_valid_json_with_all_keys(tmp_path, monkeypatch, capsys):
@@ -15,15 +27,7 @@ def test_cli_prints_valid_json_with_all_keys(tmp_path, monkeypatch, capsys):
     assert exit_code == 0
     out = capsys.readouterr().out
     payload = json.loads(out)  # must be the ONLY thing on stdout
-    expected_keys = {
-        "mood",
-        "pending_count",
-        "adopted_uncelebrated_ids",
-        "streak_rate_7d",
-        "streak_rate_baseline",
-        "sessions_24h",
-    }
-    assert set(payload.keys()) == expected_keys
+    assert set(payload.keys()) == EXPECTED_KEYS
     assert payload["mood"] == "ASLEEP"
 
 
@@ -40,3 +44,39 @@ def test_cli_reflects_stirring_mood(tmp_path, monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["mood"] == "STIRRING"
     assert payload["pending_count"] == 1
+
+
+def test_cli_defaults_character_when_no_history(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db))
+    open_db(db).close()
+
+    exit_code = main([])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["character"] == "face"
+    assert payload["character_since"] == "now"
+    assert payload["character_reason"] == "still getting to know you"
+
+
+def test_cli_reflects_recorded_character(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db))
+    conn = open_db(db)
+    record_character(
+        conn,
+        "founder",
+        "The Founder — 41 sessions and 52 hours in 14 days",
+        json.dumps({"n_sessions": 41}),
+        assigned_at="2026-07-01T00:00:00+00:00",
+    )
+    conn.close()
+
+    exit_code = main([])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["character"] == "founder"
+    assert payload["character_since"] == "2026-07-01T00:00:00+00:00"
+    assert payload["character_reason"] == "The Founder — 41 sessions and 52 hours in 14 days"

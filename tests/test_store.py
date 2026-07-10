@@ -328,7 +328,7 @@ from vidura.store import mark_celebrated
 def test_fresh_db_migrates_straight_to_v4(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 4
+    assert SCHEMA_VERSION == 5
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
     assert "celebrated" in cols
     conn.close()
@@ -340,8 +340,8 @@ def test_v3_db_migrates_in_place_to_v4(tmp_path):
     conn.execute("PRAGMA user_version = 3")
     conn.commit()
     conn.close()
-    conn = open_db(p)  # reopen: must migrate 3 -> 4 without touching v3 tables
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    conn = open_db(p)  # reopen: must migrate 3 -> current without touching v3 tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
     assert "celebrated" in cols
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

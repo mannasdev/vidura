@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 """
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA_V2 = """
 ALTER TABLE sessions ADD COLUMN streaks INTEGER;
@@ -79,6 +79,16 @@ CREATE TABLE IF NOT EXISTS executions (
 
 _SCHEMA_V4 = """
 ALTER TABLE suggestions ADD COLUMN celebrated INTEGER NOT NULL DEFAULT 0;
+"""
+
+_SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS character_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    metrics TEXT NOT NULL,
+    assigned_at TEXT NOT NULL
+);
 """
 
 _SCHEMA_V2_FTS = """
@@ -133,6 +143,13 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
         if "celebrated" not in cols:
             conn.executescript(_SCHEMA_V4)
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+        version = 4
+    if version < 5:
+        tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "character_history" not in tables:
+            conn.executescript(_SCHEMA_V5)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     return conn
@@ -377,3 +394,36 @@ def ledger_summary_for_prompt(conn: sqlite3.Connection) -> list[dict]:
         {"fix_id": r["fix_id"], "status": r["status"], "blunt_summary": r["blunt_summary"]}
         for r in kept
     ]
+
+
+def current_character(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """The most recently assigned character, or None if none has ever
+    been recorded (a fresh install, before the first sweep runs)."""
+    return conn.execute(
+        "SELECT * FROM character_history ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+def record_character(
+    conn: sqlite3.Connection,
+    character: str,
+    reason: str,
+    metrics_json: str,
+    assigned_at: str | None = None,
+) -> int:
+    """Append a new character assignment. Every assignment — including
+    the very first — gets its own row with a reason and a metrics
+    snapshot, so the history is a full audit trail of who the pet has
+    been, not just a mutable "current" pointer.
+
+    assigned_at defaults to the real current time; callers that inject
+    a synthetic `now` (character.py's evaluate/assign, and their tests)
+    should pass its ISO form explicitly so stored tenure lines up with
+    the clock they're testing against, not the wall clock."""
+    cur = conn.execute(
+        "INSERT INTO character_history(character, reason, metrics, assigned_at) "
+        "VALUES (?, ?, ?, ?)",
+        (character, reason, metrics_json, assigned_at or _now()),
+    )
+    conn.commit()
+    return cur.lastrowid

@@ -352,3 +352,52 @@ def test_gather_rescan_includes_already_reflected(tmp_path):
     work = gather_pending_work(conn, root=root, window_days=30, rescan=True)
     assert [w.path for w in work] == [seen]
     conn.close()
+
+
+def test_main_logs_character_evolution_on_first_assignment(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "vidura sweep: your pet evolved — face -> face" in err
+
+
+def test_main_logs_character_evolution_on_change(tmp_path, monkeypatch, capsys):
+    from vidura.store import open_db as _open_db
+    from vidura.store import record_character
+
+    db_path = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db_path))
+    conn = _open_db(db_path)
+    record_character(
+        conn,
+        "temple-cat",
+        "The Temple Cat — balanced practice",
+        "{}",
+        assigned_at="2000-01-01T00:00:00+00:00",  # ancient: tenure always satisfied
+    )
+    conn.close()
+
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "vidura sweep: your pet evolved — temple-cat -> face" in err
+
+
+def test_main_no_evolution_line_when_character_unchanged(tmp_path, monkeypatch, capsys):
+    from vidura.store import open_db as _open_db
+    from vidura.store import record_character
+
+    db_path = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db_path))
+    conn = _open_db(db_path)
+    record_character(conn, "face", "The Face — still getting to know you", "{}")
+    conn.close()
+
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "your pet evolved" not in err
