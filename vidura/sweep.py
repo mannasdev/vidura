@@ -11,13 +11,14 @@ sweep (session limit, ctrl-C) resumes where it left off.
 import argparse
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from vidura.chunk import chunk_turns
 from vidura.contract import CONTRACT_VERSION, PAYLOAD_BUDGET_CHARS, ReflectRequest
 from vidura.fix_index import load_fix_index
 from vidura.ingest import parse_session
+from vidura.memory import prune_chunks, remember_chunks, search_chunks
 from vidura.redact import redact
 from vidura.reflect import reflect
 from vidura.report import CLAUDE_PROJECTS_DIR, DEFAULT_WINDOW_DAYS, find_recent_sessions
@@ -43,6 +44,9 @@ class SessionWork:
     streak_count: int
     mtime: float = 0.0
     size: int = 0
+    error_keys: list[str] = field(default_factory=list)
+    error_count: int = 0
+    duration_seconds: float = 0.0
 
 
 def gather_pending_work(
@@ -85,6 +89,9 @@ def gather_pending_work(
                 streak_count=len(signals.reprompt_streaks),
                 mtime=st.st_mtime,
                 size=st.st_size,
+                error_keys=list(signals.error_repeats.keys()),
+                error_count=sum(signals.error_repeats.values()),
+                duration_seconds=signals.duration_seconds or 0.0,
             )
         )
     return work
@@ -123,6 +130,21 @@ def _batch_request(conn, batch: list[SessionWork]) -> ReflectRequest:
         }
         for f in load_fix_index()
     ]
+    # Retrieval: pull similar past friction for the errors seen in this
+    # batch. Capped at 8 terms and k=3 hits, each snippet truncated to
+    # 1500 chars — 3x1500 rides inside the 16k-token context headroom
+    # (48k chunks + scaffolding measured well under) without displacing
+    # this batch's own chunks.
+    terms: list[str] = []
+    for w in batch:
+        for key in w.error_keys:
+            if key not in terms:
+                terms.append(key)
+    terms = terms[:8]
+    similar_past_friction: list[str] = []
+    if terms:
+        hits = search_chunks(conn, terms, k=3, exclude_sessions={str(w.path) for w in batch})
+        similar_past_friction = [h.text[:1500] for h in hits]
     return ReflectRequest(
         contract_version=CONTRACT_VERSION,
         signals={
@@ -132,6 +154,7 @@ def _batch_request(conn, batch: list[SessionWork]) -> ReflectRequest:
         chunks=chunks,
         fix_index=fix_index_dicts,
         ledger=ledger_summary_for_prompt(conn),
+        similar_past_friction=similar_past_friction,
     )
 
 
@@ -151,7 +174,16 @@ def run_sweep(
                 record_suggestion(conn, suggestion)
                 stats["suggestions_recorded"] += 1
             for w in batch:
-                mark_reflected(conn, w.path, mtime=w.mtime, size=w.size)
+                remember_chunks(conn, str(w.path), w.chunks)
+                mark_reflected(
+                    conn,
+                    w.path,
+                    mtime=w.mtime,
+                    size=w.size,
+                    streaks=w.streak_count,
+                    errors=w.error_count,
+                    duration_seconds=w.duration_seconds,
+                )
                 stats["sessions_reflected"] += 1
         except Exception as exc:
             # Same silence principle as the report: a failed batch is
@@ -195,6 +227,9 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = open_db()
     try:
+        pruned = prune_chunks(conn)
+        if pruned:
+            print(f"vidura sweep: pruned {pruned} chunks older than 90 days", file=sys.stderr)
         work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days)
         if not work:
             print("Nothing new to sweep — all friction sessions already reflected.")

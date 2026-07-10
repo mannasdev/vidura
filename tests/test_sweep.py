@@ -265,3 +265,42 @@ def test_main_batches_flag_caps(tmp_path, monkeypatch):
     with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
         main(["--batches", "1"])
     assert mock_reflect.call_count == 1
+
+
+def test_run_sweep_remembers_chunks_on_success(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    batches = [[_work(tmp_path, "a.jsonl")]]
+    with patch("vidura.sweep.reflect", return_value=_response()):
+        run_sweep(conn, batches)
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 1
+    conn.close()
+
+
+def test_failed_batch_remembers_nothing(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    batches = [[_work(tmp_path, "a.jsonl")]]
+    with patch("vidura.sweep.reflect", side_effect=ReflectorError("down")):
+        run_sweep(conn, batches)
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+    conn.close()
+
+
+def test_batch_request_includes_retrieved_past_friction(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    from vidura.memory import remember_chunks
+    remember_chunks(conn, "/old/session.jsonl", ["[user] npm error ENEEDAUTH from history"])
+    w = _work(tmp_path, "a.jsonl")
+    w.error_keys = ["npm error ENEEDAUTH"]
+    with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
+        run_sweep(conn, [[w]])
+    request = mock_reflect.call_args[0][0]
+    assert any("from history" in s for s in request.similar_past_friction)
+    conn.close()
+
+
+def test_batch_request_no_error_keys_no_retrieval(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
+        run_sweep(conn, [[_work(tmp_path, "a.jsonl")]])
+    assert mock_reflect.call_args[0][0].similar_past_friction == []
+    conn.close()
