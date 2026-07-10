@@ -18,6 +18,7 @@ import sys
 
 from vidura.contract import (
     CONTRACT_VERSION,
+    PAYLOAD_BUDGET_CHARS,
     ContractVersionMismatch,
     ReflectRequest,
     ReflectResponse,
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vidura-reflect: {exc}", file=sys.stderr)
         return 2
 
-    chunks = enforce_payload_budget(payload.get("chunks", []))
+    chunks = enforce_payload_budget(payload.get("chunks", []), budget_chars=PAYLOAD_BUDGET_CHARS)
     request = ReflectRequest(
         contract_version=payload["contract_version"],
         signals=payload.get("signals", {}),

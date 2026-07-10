@@ -7,6 +7,14 @@ Design doc Next Steps #3 and Eng Review Findings 1, 2, 4, 7:
 - payload budget: enforced before the payload is built, so a long
   session can't silently overflow the reflector model's context window.
 - timeout: enforced by the caller (Task 8's Ollama call), not here.
+
+PAYLOAD_BUDGET_CHARS is the one operative default, shared by both
+callers (vidura/cli.py and vidura/report.py) so they can't silently
+re-cut an already-budgeted payload to a smaller size. It reflects the
+reflector's 16384-token context window (reflect.OLLAMA_NUM_CTX), which
+comfortably fits ~48k chars of chunks plus prompt scaffolding.
+DEFAULT_PAYLOAD_BUDGET_CHARS is kept as an alias for callers/tests that
+still reference the old name.
 """
 
 from dataclasses import asdict, dataclass, field
@@ -14,7 +22,8 @@ from typing import Any
 
 CONTRACT_VERSION = 1
 DEFAULT_TIMEOUT_SECONDS = 60
-DEFAULT_PAYLOAD_BUDGET_CHARS = 24000  # placeholder — see TODOS.md
+PAYLOAD_BUDGET_CHARS = 48000
+DEFAULT_PAYLOAD_BUDGET_CHARS = PAYLOAD_BUDGET_CHARS  # alias — old name
 
 
 class ContractVersionMismatch(Exception):
@@ -63,7 +72,7 @@ def validate_contract_version(payload: dict[str, Any]) -> None:
 
 
 def enforce_payload_budget(
-    chunks: list[str], budget_chars: int = DEFAULT_PAYLOAD_BUDGET_CHARS
+    chunks: list[str], budget_chars: int = PAYLOAD_BUDGET_CHARS
 ) -> list[str]:
     """Keep the most recent chunks that fit budget_chars, dropping the
     oldest first. Always keeps at least one chunk even if it alone

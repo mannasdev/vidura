@@ -17,7 +17,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from vidura.chunk import chunk_turns
-from vidura.contract import CONTRACT_VERSION, ReflectRequest, enforce_payload_budget
+from vidura.contract import (
+    CONTRACT_VERSION,
+    PAYLOAD_BUDGET_CHARS,
+    ReflectRequest,
+    enforce_payload_budget,
+)
 from vidura.fix_index import load_fix_index
 from vidura.ingest import parse_session
 from vidura.redact import redact
@@ -26,11 +31,6 @@ from vidura.signals import extract_signals
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_WINDOW_DAYS = 30
-
-# Larger than the contract's conservative default (24k): the reflector now
-# requests a 16384-token context window (reflect.OLLAMA_NUM_CTX), which
-# comfortably fits ~48k chars of chunks plus prompt scaffolding.
-REPORT_PAYLOAD_BUDGET_CHARS = 48000
 
 
 def find_recent_sessions(
@@ -86,7 +86,7 @@ def build_report_request(session_paths: list[Path]) -> ReflectRequest:
     # enforce_payload_budget keeps the TAIL of the list, so sort ascending —
     # the densest chunks land at the end and survive the cut.
     all_chunks.sort(key=lambda text: text.count("[user]"))
-    chunks = enforce_payload_budget(all_chunks, budget_chars=REPORT_PAYLOAD_BUDGET_CHARS)
+    chunks = enforce_payload_budget(all_chunks, budget_chars=PAYLOAD_BUDGET_CHARS)
 
     fix_index_dicts = [
         {
@@ -99,12 +99,25 @@ def build_report_request(session_paths: list[Path]) -> ReflectRequest:
         for f in load_fix_index()
     ]
 
+    # Bound the signals payload itself: 30 days of logs can produce
+    # hundreds of streaks/error keys, which would silently re-evict the
+    # prompt's instructions the same way uncapped chunks did (see the
+    # friction-density ranking comment above) — this time inside the
+    # signals block rather than the chunks block. Keep the top entries
+    # by magnitude (longest streaks, highest-count errors) plus a total
+    # count so the model still sees the full scale.
+    top_reprompt_streaks = sorted(all_reprompt_streaks, reverse=True)[:50]
+    top_error_repeats = dict(
+        sorted(all_error_repeats.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    )
+
     return ReflectRequest(
         contract_version=CONTRACT_VERSION,
         signals={
             "sessions_scanned": sessions_scanned,
-            "reprompt_streaks": all_reprompt_streaks,
-            "error_repeats": all_error_repeats,
+            "reprompt_streaks": top_reprompt_streaks,
+            "reprompt_streaks_total": len(all_reprompt_streaks),
+            "error_repeats": top_error_repeats,
             "models_used": sorted(all_models),
         },
         chunks=chunks,

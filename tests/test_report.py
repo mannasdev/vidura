@@ -173,6 +173,38 @@ def test_build_report_request_prioritizes_friction_dense_chunks(tmp_path):
     assert any("not like that" in c for c in request.chunks)
 
 
+def test_build_report_request_caps_reprompt_streaks_and_error_repeats(tmp_path, monkeypatch):
+    from vidura.signals import SessionSignals
+
+    session = tmp_path / "session.jsonl"
+    ts = "2026-07-01T10:00:00.000Z"
+    _write_session(session, [_user_turn("hi", ts)])
+
+    fake_streaks = list(range(1, 101))  # 100 streaks, values 1..100
+    fake_errors = {f"err{i}": i for i in range(1, 31)}  # 30 distinct errors
+
+    monkeypatch.setattr(
+        "vidura.report.extract_signals",
+        lambda turns: SessionSignals(
+            reprompt_streaks=fake_streaks,
+            error_repeats=fake_errors,
+            duration_seconds=None,
+            models_used=[],
+            turn_count=len(turns),
+        ),
+    )
+
+    request = build_report_request([session])
+
+    assert len(request.signals["reprompt_streaks"]) == 50
+    assert request.signals["reprompt_streaks"] == sorted(fake_streaks, reverse=True)[:50]
+    assert request.signals["reprompt_streaks_total"] == 100
+
+    assert len(request.signals["error_repeats"]) == 20
+    top_20_keys = {k for k, _ in sorted(fake_errors.items(), key=lambda kv: kv[1], reverse=True)[:20]}
+    assert set(request.signals["error_repeats"].keys()) == top_20_keys
+
+
 def test_find_recent_sessions_excludes_vidura_reflector_sessions(tmp_path):
     project_dir = tmp_path / "-Users-x--vidura-reflector-cwd"
     project_dir.mkdir()
