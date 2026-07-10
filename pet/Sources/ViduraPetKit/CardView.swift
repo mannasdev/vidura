@@ -15,6 +15,7 @@ public struct CardView: View {
     @ObservedObject var state: StateModel
 
     @State private var pendingDoAction: DoSheetContext?
+    @State private var showCharacterCaption = false
     private let policy = AnimationPolicy(reduceMotion: AnimationPolicy.systemReduceMotion)
 
     public init(state: StateModel) {
@@ -63,6 +64,20 @@ public struct CardView: View {
         PetMood(rawMood: state.mood?.mood ?? Mood.asleep.rawValue)
     }
 
+    /// The current earned character's kebab id, defaulting to
+    /// "temple-cat" (today's shipped look) when the Python core hasn't
+    /// shipped the character fields yet — see `MoodState.effectiveCharacter`.
+    private var currentCharacter: String {
+        state.mood?.effectiveCharacter ?? CharacterAsset.defaultCharacter
+    }
+
+    private var characterCaption: String {
+        CharacterCaption.line(
+            reason: state.mood?.characterReason,
+            since: state.mood?.characterSince
+        )
+    }
+
     /// The mood label's color per spec §7 ambiguity #1: ASLEEP/CONTENT
     /// (calm/neutral baseline moods) render muted (text-tertiary);
     /// active/urgent moods (STIRRING, CONCERNED, RECOGNITION, PROUD)
@@ -83,26 +98,38 @@ public struct CardView: View {
     // MARK: - Hero (§2.1)
 
     private var hero: some View {
-        HStack(alignment: .center, spacing: 18) {
-            CharacterPortrait(
-                mood: currentMood,
-                celebrateOnAppear: state.shouldCelebrateOnOpen,
-                policy: policy
-            )
-            .id(state.panelOpenCount)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Vidura")
-                    .font(Theme.nameFont)
-                    .foregroundStyle(Theme.textPrimary)
-                Text(currentMood.rawValue)
-                    .font(Theme.moodFont)
-                    .tracking(Theme.moodTracking)
-                    .foregroundStyle(moodLabelColor)
-                Text(subtitle)
-                    .font(Theme.subtitleFont)
-                    .foregroundStyle(Theme.textSecondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 18) {
+                CharacterPortrait(
+                    character: currentCharacter,
+                    mood: currentMood,
+                    celebrateOnAppear: state.shouldCelebrateOnOpen,
+                    policy: policy,
+                    onTap: { showCharacterCaption.toggle() }
+                )
+                .id(state.panelOpenCount)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Vidura")
+                        .font(Theme.nameFont)
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(currentMood.rawValue)
+                        .font(Theme.moodFont)
+                        .tracking(Theme.moodTracking)
+                        .foregroundStyle(moodLabelColor)
+                    Text(subtitle)
+                        .font(Theme.subtitleFont)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+
+            if showCharacterCaption {
+                Text(characterCaption)
+                    .font(Theme.footerFont)
+                    .foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            }
         }
         .padding(.top, 18)
         .padding(.trailing, 20)

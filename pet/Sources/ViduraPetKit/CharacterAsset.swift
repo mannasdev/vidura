@@ -34,7 +34,7 @@ public enum PetMood: String, CaseIterable {
 /// (`Bundle.module`, populated by `Package.swift`'s `.copy("Resources")`)
 /// and caches them — six 384×384px bitmaps is small, but there is no
 /// reason to decode the same PNG repeatedly on every header redraw.
-enum CharacterAsset {
+public enum CharacterAsset {
     private static var cache: [PetMood: NSImage] = [:]
 
     static func image(for mood: PetMood) -> NSImage? {
@@ -52,6 +52,64 @@ enum CharacterAsset {
             return nil
         }
         cache[mood] = image
+        return image
+    }
+
+    /// Default character rendered when no earned character is known yet
+    /// (spec: "temple-cat — today's shipped look").
+    public static let defaultCharacter = "temple-cat"
+
+    private static var characterCache: [String: NSImage] = [:]
+
+    /// Loads the 36-asset character system's `{character}-{mood}.png`
+    /// files from `Resources/characters/`, with a three-step fallback
+    /// chain so a bad/unknown character id or a not-yet-shipped asset
+    /// never blanks the header (spec item 3):
+    ///   1. exact `{character}-{mood}` hit;
+    ///   2. `temple-cat-{mood}` (same mood, default character);
+    ///   3. the legacy `cat-{mood}` asset (pre-character-system art);
+    /// returning `nil` only if all three misses — the caller (
+    /// `CharacterPortrait`) already handles a `nil` image with its SF
+    /// Symbol placeholder.
+    ///
+    /// Pure with respect to inputs (aside from the cache, which is only
+    /// a memoization of the same bundle lookup and never changes which
+    /// image is returned for a given key) — safe to unit test directly.
+    public static func characterImage(character: String, mood: PetMood) -> NSImage? {
+        let cacheKey = "\(character)-\(mood.rawValue)"
+        if let cached = characterCache[cacheKey] {
+            return cached
+        }
+
+        if let exact = loadCharacterAsset(character: character, mood: mood) {
+            characterCache[cacheKey] = exact
+            return exact
+        }
+        if character != defaultCharacter,
+           let fallbackCharacter = loadCharacterAsset(character: defaultCharacter, mood: mood) {
+            characterCache[cacheKey] = fallbackCharacter
+            return fallbackCharacter
+        }
+        if let legacy = image(for: mood) {
+            characterCache[cacheKey] = legacy
+            return legacy
+        }
+        return nil
+    }
+
+    private static func loadCharacterAsset(character: String, mood: PetMood) -> NSImage? {
+        let name = "\(character)-\(mood.rawValue.lowercased())"
+        guard let url = Bundle.module.url(
+            forResource: name,
+            withExtension: "png",
+            subdirectory: "Resources/characters"
+        ) ?? Bundle.module.url(
+            forResource: name,
+            withExtension: "png",
+            subdirectory: "characters"
+        ), let image = NSImage(contentsOf: url) else {
+            return nil
+        }
         return image
     }
 }
@@ -74,9 +132,11 @@ enum CharacterAsset {
 /// disappear — no NSTimer leaks. Every knob is gated by `AnimationPolicy`,
 /// which itself collapses to "off"/"instant" under Reduce Motion.
 public struct CharacterPortrait: View {
+    let character: String
     let mood: PetMood
     let celebrateOnAppear: Bool
     let policy: AnimationPolicy
+    let onTap: (() -> Void)?
 
     @State private var breathingUp = false
     @State private var microMotionTask: Task<Void, Never>?
@@ -85,13 +145,17 @@ public struct CharacterPortrait: View {
     @State private var hasFiredCelebration = false
 
     public init(
+        character: String = CharacterAsset.defaultCharacter,
         mood: PetMood,
         celebrateOnAppear: Bool = false,
-        policy: AnimationPolicy = AnimationPolicy(reduceMotion: AnimationPolicy.systemReduceMotion)
+        policy: AnimationPolicy = AnimationPolicy(reduceMotion: AnimationPolicy.systemReduceMotion),
+        onTap: (() -> Void)? = nil
     ) {
+        self.character = character
         self.mood = mood
         self.celebrateOnAppear = celebrateOnAppear
         self.policy = policy
+        self.onTap = onTap
     }
 
     private var breathingActive: Bool {
@@ -104,7 +168,7 @@ public struct CharacterPortrait: View {
 
     public var body: some View {
         Group {
-            if let nsImage = CharacterAsset.image(for: mood) {
+            if let nsImage = CharacterAsset.characterImage(character: character, mood: mood) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .interpolation(.none)
@@ -135,6 +199,10 @@ public struct CharacterPortrait: View {
         .onChange(of: mood) { _ in
             startBreathingIfNeeded()
             startMicroMotionLoop()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap?()
         }
     }
 

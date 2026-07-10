@@ -74,6 +74,77 @@ final class DecodingTests: XCTestCase {
         XCTAssertNil(decoded.streakRateBaseline)
     }
 
+    /// Character-as-diagnosis spec: the additive `character` /
+    /// `character_since` / `character_reason` fields decode cleanly when
+    /// present, and `effectiveCharacter` passes the earned id straight
+    /// through.
+    func test_decodesMoodStateWithCharacterFields() throws {
+        let json = """
+        {
+            "mood": "PROUD",
+            "pending_count": 0,
+            "adopted_uncelebrated_ids": [],
+            "streak_rate_7d": 0.8,
+            "streak_rate_baseline": 0.6,
+            "sessions_24h": 5,
+            "character": "founder",
+            "character_since": "2026-06-20T00:00:00Z",
+            "character_reason": "The Founder \\u2014 41 sessions and 52 hours in 14 days"
+        }
+        """
+        let decoded = try decoder.decode(MoodState.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.character, "founder")
+        XCTAssertEqual(decoded.characterSince, "2026-06-20T00:00:00Z")
+        XCTAssertEqual(decoded.characterReason, "The Founder \u{2014} 41 sessions and 52 hours in 14 days")
+        XCTAssertEqual(decoded.effectiveCharacter, "founder")
+    }
+
+    /// Old-CLI compatibility: a payload built before the character system
+    /// shipped omits all three keys entirely (not just nulls them out) —
+    /// decoding must not throw, and `effectiveCharacter` must default to
+    /// "temple-cat" (today's shipped look) per the additive-contract
+    /// requirement.
+    func test_decodesMoodStateWithoutCharacterFields_defaultsGracefully() throws {
+        let json = """
+        {
+            "mood": "ASLEEP",
+            "pending_count": 0,
+            "adopted_uncelebrated_ids": [],
+            "streak_rate_7d": null,
+            "streak_rate_baseline": null,
+            "sessions_24h": 0
+        }
+        """
+        let decoded = try decoder.decode(MoodState.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.character)
+        XCTAssertNil(decoded.characterSince)
+        XCTAssertNil(decoded.characterReason)
+        XCTAssertEqual(decoded.effectiveCharacter, "temple-cat")
+    }
+
+    /// Explicit JSON `null`s (as opposed to omitted keys) for the three
+    /// character fields must also decode to `nil`, not throw.
+    func test_decodesMoodStateWithNullCharacterFields() throws {
+        let json = """
+        {
+            "mood": "CONTENT",
+            "pending_count": 0,
+            "adopted_uncelebrated_ids": [],
+            "streak_rate_7d": 0.5,
+            "streak_rate_baseline": 0.5,
+            "sessions_24h": 2,
+            "character": null,
+            "character_since": null,
+            "character_reason": null
+        }
+        """
+        let decoded = try decoder.decode(MoodState.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.character)
+        XCTAssertNil(decoded.characterSince)
+        XCTAssertNil(decoded.characterReason)
+        XCTAssertEqual(decoded.effectiveCharacter, "temple-cat")
+    }
+
     // MARK: - LedgerEntry
 
     /// Full-field row shape from tests/test_ledger_cli.py: has_action

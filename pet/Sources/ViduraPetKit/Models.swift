@@ -23,8 +23,14 @@ public enum DryRunOutcome {
 }
 
 /// Mirrors vidura.mood.compute_mood's JSON payload (vidura-state stdout).
-/// All fields are always present per that module's contract, so decoding
-/// never needs defensive optionals beyond what the Python side allows.
+/// The original five fields are always present per that module's
+/// contract, so decoding never needs defensive optionals beyond what the
+/// Python side allows. `character`/`characterSince`/`characterReason` are
+/// an additive contract change (character-as-diagnosis spec) shipped by a
+/// parallel Python change — this Swift side must decode cleanly whether
+/// or not an old CLI (built before that change) supplies them, so all
+/// three are optional with a `decodeIfPresent` fallback baked into
+/// `init(from:)`.
 public struct MoodState: Codable, Equatable {
     public let mood: String
     public let pendingCount: Int
@@ -32,6 +38,16 @@ public struct MoodState: Codable, Equatable {
     public let streakRate7d: Double?
     public let streakRateBaseline: Double?
     public let sessions24h: Int
+    /// Kebab-id of the earned character (e.g. "founder"), or `nil` when
+    /// decoded from an old CLI that predates the character system.
+    public let character: String?
+    /// ISO-8601 timestamp of the current character assignment, or `nil`
+    /// under the same old-CLI condition.
+    public let characterSince: String?
+    /// Human sentence explaining the assignment, incl. key metrics (e.g.
+    /// "The Founder — 41 sessions and 52 hours in 14 days"), or `nil`
+    /// under the same old-CLI condition.
+    public let characterReason: String?
 
     enum CodingKeys: String, CodingKey {
         case mood
@@ -40,6 +56,9 @@ public struct MoodState: Codable, Equatable {
         case streakRate7d = "streak_rate_7d"
         case streakRateBaseline = "streak_rate_baseline"
         case sessions24h = "sessions_24h"
+        case character
+        case characterSince = "character_since"
+        case characterReason = "character_reason"
     }
 
     public init(
@@ -48,7 +67,10 @@ public struct MoodState: Codable, Equatable {
         adoptedUncelebratedIds: [Int],
         streakRate7d: Double?,
         streakRateBaseline: Double?,
-        sessions24h: Int
+        sessions24h: Int,
+        character: String? = nil,
+        characterSince: String? = nil,
+        characterReason: String? = nil
     ) {
         self.mood = mood
         self.pendingCount = pendingCount
@@ -56,6 +78,29 @@ public struct MoodState: Codable, Equatable {
         self.streakRate7d = streakRate7d
         self.streakRateBaseline = streakRateBaseline
         self.sessions24h = sessions24h
+        self.character = character
+        self.characterSince = characterSince
+        self.characterReason = characterReason
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mood = try container.decode(String.self, forKey: .mood)
+        pendingCount = try container.decode(Int.self, forKey: .pendingCount)
+        adoptedUncelebratedIds = try container.decode([Int].self, forKey: .adoptedUncelebratedIds)
+        streakRate7d = try container.decodeIfPresent(Double.self, forKey: .streakRate7d)
+        streakRateBaseline = try container.decodeIfPresent(Double.self, forKey: .streakRateBaseline)
+        sessions24h = try container.decode(Int.self, forKey: .sessions24h)
+        character = try container.decodeIfPresent(String.self, forKey: .character)
+        characterSince = try container.decodeIfPresent(String.self, forKey: .characterSince)
+        characterReason = try container.decodeIfPresent(String.self, forKey: .characterReason)
+    }
+
+    /// The character id to actually render, defaulting to "temple-cat"
+    /// (today's shipped look) when the Python side hasn't supplied one
+    /// yet — never `nil`, so callers never need their own fallback.
+    public var effectiveCharacter: String {
+        character ?? "temple-cat"
     }
 }
 
