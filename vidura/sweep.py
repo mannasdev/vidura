@@ -17,6 +17,7 @@ from pathlib import Path
 from vidura.chunk import chunk_turns
 from vidura.contract import CONTRACT_VERSION, PAYLOAD_BUDGET_CHARS, ReflectRequest
 from vidura.fix_index import load_fix_index
+from vidura.follow_through import evaluate_follow_through
 from vidura.ingest import parse_session
 from vidura.memory import prune_chunks, remember_chunks, search_chunks
 from vidura.redact import redact
@@ -249,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
             f"{stats['sessions_reflected']} sessions reflected, "
             f"{stats['suggestions_recorded']} suggestions recorded.\n"
         )
+        for _suggestion_id, fix_id, verdict in evaluate_follow_through(conn):
+            if verdict == "adopted":
+                print(f"Follow-through: [{fix_id}] adopted — behavior changed since you accepted it.")
+            elif verdict == "lapsed":
+                print(f"Follow-through: [{fix_id}] lapsed — accepted 2+ weeks ago, behavior unchanged.")
         _print_ledger_report(conn)
         return 0
     finally:
