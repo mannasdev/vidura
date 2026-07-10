@@ -54,10 +54,9 @@ enum ViduraCore {
         return nil
     }
 
-    /// Ask `/usr/bin/env <tool>` to resolve `tool` against PATH, without
-    /// actually running it (env -v style probe would run it, so instead
-    /// we use `command -v` semantics via /usr/bin/which, which is always
-    /// present on macOS and never executes the target).
+    /// Resolve `tool` against PATH without actually running it, using
+    /// /usr/bin/which — which is always present on macOS, performs a
+    /// pure PATH lookup, and never executes the target.
     private static func resolveViaEnv(_ tool: String) -> String? {
         let which = Process()
         which.executableURL = URL(fileURLWithPath: "/usr/bin/which")
@@ -102,6 +101,25 @@ enum ViduraCore {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
+        // Drain both pipes concurrently with the process's lifetime via
+        // readabilityHandler. Pipes have a small fixed kernel buffer
+        // (~64KB); a chatty child that fills stdout or stderr before we
+        // ever call readDataToEndOfFile() would block forever on write()
+        // while we block on waiting for it to exit — a classic pipe
+        // deadlock. Accumulating incrementally as data arrives avoids
+        // that regardless of output volume or timing.
+        let stdoutBox = OutputBox()
+        let stderrBox = OutputBox()
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty { stdoutBox.append(chunk) }
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty { stderrBox.append(chunk) }
+        }
+
         try process.run()
 
         let deadline = Date().addingTimeInterval(timeout)
@@ -110,16 +128,47 @@ enum ViduraCore {
         }
         if process.isRunning {
             process.terminate()
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
             throw CoreError.timedOut(tool)
         }
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        // Process has exited, but bytes already in the pipe buffer may
+        // not have been delivered to the readabilityHandler yet. Clear
+        // the handler and do one last synchronous drain to catch any
+        // remainder before reading the accumulated buffers.
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        let stdoutRemainder = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrRemainder = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        if !stdoutRemainder.isEmpty { stdoutBox.append(stdoutRemainder) }
+        if !stderrRemainder.isEmpty { stderrBox.append(stderrRemainder) }
+
         return Result(
             exitCode: process.terminationStatus,
-            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
-            stderr: String(data: stderrData, encoding: .utf8) ?? ""
+            stdout: String(data: stdoutBox.data, encoding: .utf8) ?? "",
+            stderr: String(data: stderrBox.data, encoding: .utf8) ?? ""
         )
+    }
+
+    /// Thread-safe accumulator for pipe output collected off the
+    /// readabilityHandler's dispatch queue while `run` polls for exit
+    /// on its own thread.
+    private final class OutputBox: @unchecked Sendable {
+        private var buffer = Data()
+        private let lock = NSLock()
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            buffer.append(chunk)
+            lock.unlock()
+        }
+
+        var data: Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return buffer
+        }
     }
 
     /// Async convenience: runs `run(_:arguments:timeout:)` on a background

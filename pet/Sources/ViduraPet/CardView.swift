@@ -13,6 +13,10 @@ struct CardView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
+            if let lastError = state.lastError {
+                errorBanner(lastError)
+            }
+
             if !state.entries.isEmpty || !celebratableIds.isEmpty {
                 celebrationBanner
             }
@@ -60,6 +64,14 @@ struct CardView: View {
         .padding(12)
     }
 
+    private func errorBanner(_ message: String) -> some View {
+        Text(message)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+    }
+
     @ViewBuilder
     private var celebrationBanner: some View {
         if let firstId = celebratableIds.first {
@@ -86,10 +98,12 @@ struct CardView: View {
 }
 
 /// Identifies which ledger entry a Do confirmation sheet is for, plus
-/// the dry-run preview text already fetched for it.
+/// the dry-run outcome already fetched for it. The sheet's ability to
+/// show a live Confirm button is entirely gated on `outcome` being
+/// `.success` — see DoConfirmSheet.
 struct DoSheetContext: Identifiable {
     let entry: LedgerEntry
-    let preview: String
+    let outcome: DryRunOutcome
     var id: Int { entry.id }
 }
 
@@ -143,10 +157,9 @@ private struct EntryRow: View {
     private func startDo() {
         isStartingDo = true
         Task {
-            let result = await state.doDryRun(entry.id)
+            let outcome = await state.doDryRun(entry.id)
             isStartingDo = false
-            let preview = result?.stdout.isEmpty == false ? result!.stdout : (result?.stderr ?? "(no preview available)")
-            onDo(DoSheetContext(entry: entry, preview: preview))
+            onDo(DoSheetContext(entry: entry, outcome: outcome))
         }
     }
 }
@@ -166,35 +179,61 @@ private struct DoConfirmSheet: View {
             Text(context.entry.actionLabel ?? "Run action")
                 .font(.subheadline)
 
-            ScrollView {
-                Text(context.preview)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxHeight: 160)
-            .padding(8)
-            .background(Color.gray.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            switch context.outcome {
+            case .success(let preview):
+                ScrollView {
+                    Text(preview)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+                .padding(8)
+                .background(Color.gray.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
 
-            if let resultText {
-                Text(resultText)
+                if let resultText {
+                    Text(resultText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Button("Cancel") { dismiss() }
+                    Spacer()
+                    // Confirm only ever appears here, inside .success —
+                    // a failed/timed-out/nonzero-exit dry run can never
+                    // reach this branch, so there is no code path where
+                    // Confirm is live without a verified-clean preview.
+                    Button("Confirm") {
+                        isRunning = true
+                        Task {
+                            let result = await state.doConfirmed(context.entry.id)
+                            isRunning = false
+                            resultText = result?.stdout.isEmpty == false ? result!.stdout : result?.stderr
+                        }
+                    }
+                    .disabled(isRunning)
+                    .keyboardShortcut(.defaultAction)
+                }
+
+            case .failure(let message):
+                Text(message)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.red.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                Text("No preview could be verified, so this action cannot be confirmed here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
 
-            HStack {
-                Button("Cancel") { dismiss() }
-                Spacer()
-                Button("Confirm") {
-                    isRunning = true
-                    Task {
-                        let result = await state.doConfirmed(context.entry.id)
-                        isRunning = false
-                        resultText = result?.stdout.isEmpty == false ? result!.stdout : result?.stderr
-                    }
+                HStack {
+                    Spacer()
+                    Button("Close") { dismiss() }
+                        .keyboardShortcut(.defaultAction)
                 }
-                .disabled(isRunning)
-                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(16)

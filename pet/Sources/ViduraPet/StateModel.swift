@@ -20,6 +20,7 @@ final class StateModel: ObservableObject {
     private var pollTimer: Timer?
     private var sweepTimer: Timer?
     private var sweepInFlight = false
+    private var refreshInFlight = false
 
     /// Poll interval: 60s minimum per the plan's anti-Clippy invariant
     /// ("no timers faster than 60s"). Do not lower this.
@@ -52,8 +53,14 @@ final class StateModel: ObservableObject {
 
     /// Re-fetch mood + ledger. Safe to call from a manual popover-open
     /// refresh as well as the timer — it's just two fast local reads.
+    /// Guarded against overlap: the popover-open refresh and the 60s
+    /// timer can otherwise fire close together and race, which used to
+    /// let the STIRRING transition's notification double-fire.
     func refresh() {
+        guard !refreshInFlight else { return }
+        refreshInFlight = true
         Task {
+            defer { refreshInFlight = false }
             await self.pollState()
             await self.pollLedger()
         }
@@ -69,6 +76,8 @@ final class StateModel: ObservableObject {
             let decoded = try JSONDecoder().decode(MoodState.self, from: Data(result.stdout.utf8))
             applyNewMood(decoded)
             lastError = nil
+        } catch let error as ViduraCore.CoreError {
+            lastError = Self.friendlyMessage(for: error)
         } catch {
             lastError = "\(error)"
         }
@@ -83,8 +92,22 @@ final class StateModel: ObservableObject {
             }
             let decoded = try JSONDecoder().decode([LedgerEntry].self, from: Data(result.stdout.utf8))
             entries = decoded.filter { $0.status == "pending" }
+        } catch let error as ViduraCore.CoreError {
+            lastError = Self.friendlyMessage(for: error)
         } catch {
             lastError = "\(error)"
+        }
+    }
+
+    /// A short, actionable line for the popover's error slot — the pet
+    /// otherwise just looks asleep/empty when the CLIs can't be found or
+    /// keep failing, which is indistinguishable from "nothing pending".
+    private static func friendlyMessage(for error: ViduraCore.CoreError) -> String {
+        switch error {
+        case .binaryNotFound:
+            return "vidura CLIs not found — set VIDURA_BIN"
+        case .timedOut(let tool):
+            return "\(tool) timed out"
         }
     }
 
@@ -179,8 +202,27 @@ final class StateModel: ObservableObject {
     }
 
     /// Dry-run preview for the Do confirmation sheet — never mutates.
-    func doDryRun(_ id: Int) async -> ViduraCore.Result? {
-        try? await ViduraCore.runAsync("vidura-do", arguments: [String(id), "--dry-run"])
+    /// Explicitly checks the exit code: only a clean exit (0) with
+    /// non-empty stdout counts as a trustworthy preview. Anything else —
+    /// nonzero exit, empty output, a thrown/timed-out/missing-binary
+    /// error — is surfaced as a hard failure so the sheet never offers a
+    /// live Confirm button over a preview that isn't real.
+    func doDryRun(_ id: Int) async -> DryRunOutcome {
+        do {
+            let result = try await ViduraCore.runAsync("vidura-do", arguments: [String(id), "--dry-run"])
+            guard result.exitCode == 0 else {
+                let detail = result.stderr.isEmpty ? "exited \(result.exitCode)" : result.stderr
+                return .failure(message: "Dry run failed: \(detail)")
+            }
+            guard !result.stdout.isEmpty else {
+                return .failure(message: "Dry run produced no preview.")
+            }
+            return .success(preview: result.stdout)
+        } catch let error as ViduraCore.CoreError {
+            return .failure(message: Self.friendlyMessage(for: error))
+        } catch {
+            return .failure(message: "\(error)")
+        }
     }
 
     /// Confirmed execution: the pet has already shown the exact action

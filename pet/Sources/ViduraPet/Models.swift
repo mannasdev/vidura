@@ -1,5 +1,19 @@
 import Foundation
 
+/// Outcome of a `vidura-do --dry-run` invocation, used to gate whether
+/// the confirmation sheet may ever show a live Confirm button. A dry-run
+/// that failed, timed out, or exited nonzero is NOT a preview of a safe
+/// action — it's a hard error, and the sheet must not offer to proceed.
+enum DryRunOutcome {
+    /// Exit code 0 and non-empty stdout: `preview` is the exact action
+    /// the confirmed run will take. Confirm may be shown.
+    case success(preview: String)
+    /// Nonzero exit, empty stdout on success, a thrown CoreError, or any
+    /// other failure to produce a trustworthy preview. `message` is
+    /// shown as a hard error; the sheet offers Cancel/Close only.
+    case failure(message: String)
+}
+
 /// Mirrors vidura.mood.compute_mood's JSON payload (vidura-state stdout).
 /// All fields are always present per that module's contract, so decoding
 /// never needs defensive optionals beyond what the Python side allows.
