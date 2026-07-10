@@ -99,3 +99,40 @@ def test_skips_blank_lines(tmp_path):
     path = _write_jsonl(tmp_path, [line, "", "   ", line])
     turns = list(parse_session(path))
     assert len(turns) == 2
+
+
+def test_tool_result_only_turn_flagged(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [{"type": "tool_result", "content": "ls output here"}]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_tool_result is True
+    assert turns[0].text == "ls output here"
+
+
+def test_human_text_turn_not_flagged_as_tool_result(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [{"type": "text", "text": "real human prompt"}]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_tool_result is False
+
+
+def test_mixed_text_and_tool_result_counts_as_human(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "output"},
+            {"type": "text", "text": "and my follow-up question"},
+        ]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_tool_result is False

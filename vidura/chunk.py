@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from vidura.ingest import Turn
 
 CHUNK_TARGET_CHARS = 6000
+TOOL_RESULT_MAX_CHARS = 400
 
 
 @dataclass
@@ -35,7 +36,18 @@ def chunk_turns(turns: list[Turn]) -> list[Chunk]:
         buffer_turns = 0
 
     for turn in turns:
-        turn_text = f"[{turn.type}] {turn.text}".strip()
+        # Tool results are user-type records but not human speech — label
+        # them honestly so "[user]" in a chunk always means a human prompt
+        # (the report's friction-density ranking depends on this), and cap
+        # their length: a single ls/build dump was eating whole chunks,
+        # crowding out the dialogue the reflector judges.
+        if turn.is_tool_result:
+            text = turn.text
+            if len(text) > TOOL_RESULT_MAX_CHARS:
+                text = text[:TOOL_RESULT_MAX_CHARS] + " …[tool output truncated]"
+            turn_text = f"[tool_result] {text}".strip()
+        else:
+            turn_text = f"[{turn.type}] {turn.text}".strip()
         if not turn.text:
             continue
         if buffer_chars + len(turn_text) > CHUNK_TARGET_CHARS and buffer:

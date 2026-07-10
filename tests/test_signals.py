@@ -97,3 +97,14 @@ def test_turn_count():
     turns = [_turn("user", "a"), _turn("assistant", "b", tool_use=True)]
     signals = extract_signals(turns)
     assert signals.turn_count == 2
+
+
+def test_tool_result_turns_do_not_count_in_streaks():
+    turns = [
+        _turn("user", "do the thing"),
+        Turn(type="user", timestamp=None, text="tool output", tool_use=False, model=None, is_tool_result=True),
+        Turn(type="user", timestamp=None, text="more tool output", tool_use=False, model=None, is_tool_result=True),
+        _turn("assistant", "ok", tool_use=True),
+    ]
+    signals = extract_signals(turns)
+    assert signals.reprompt_streaks == []

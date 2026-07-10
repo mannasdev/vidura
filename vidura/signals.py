@@ -51,7 +51,11 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
             models.add(turn.model)
 
         if turn.type == "user":
-            current_streak += 1
+            # Tool results arrive as user-type records but are not human
+            # prompts — counting them inflated streaks with machine noise
+            # (observed in M0). They are transparent to the streak.
+            if not turn.is_tool_result:
+                current_streak += 1
         elif turn.type == "assistant":
             if turn.tool_use:
                 if current_streak >= 2:

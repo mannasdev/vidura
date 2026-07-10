@@ -30,30 +30,42 @@ class Turn:
     text: str
     tool_use: bool
     model: str | None
+    # Claude Code delivers tool RESULTS as user-type records. A tool-result
+    # turn is not a human prompt: it must not count as a re-prompt in the
+    # streak signal and must not render as "[user]" in chunks (observed
+    # live in M0: tool-output spam dominated the friction-density ranking
+    # while carrying zero human friction).
+    is_tool_result: bool = False
 
 
-def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool]:
+def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool]:
     content = message.get("content")
     if isinstance(content, str):
-        return content, False
+        return content, False, False
     if not isinstance(content, list):
-        return "", False
+        return "", False, False
 
     text_parts: list[str] = []
     tool_use = False
+    has_tool_result = False
+    has_human_text = False
     for block in content:
         if not isinstance(block, dict):
             continue
         block_type = block.get("type")
         if block_type == "text":
+            if block.get("text", "").strip():
+                has_human_text = True
             text_parts.append(block.get("text", ""))
         elif block_type == "tool_use":
             tool_use = True
         elif block_type == "tool_result":
+            has_tool_result = True
             result_content = block.get("content")
             if isinstance(result_content, str):
                 text_parts.append(result_content)
-    return "\n".join(text_parts), tool_use
+    is_tool_result = has_tool_result and not has_human_text
+    return "\n".join(text_parts), tool_use, is_tool_result
 
 
 def parse_session(path: Path) -> Iterator[Turn]:
@@ -76,11 +88,12 @@ def parse_session(path: Path) -> Iterator[Turn]:
             if not isinstance(message, dict):
                 continue
 
-            text, tool_use = _extract_text_and_tool_use(message)
+            text, tool_use, is_tool_result = _extract_text_and_tool_use(message)
             yield Turn(
                 type=record_type,
                 timestamp=record.get("timestamp"),
                 text=text,
                 tool_use=tool_use,
                 model=message.get("model"),
+                is_tool_result=is_tool_result,
             )

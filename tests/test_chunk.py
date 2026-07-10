@@ -41,3 +41,20 @@ def test_char_count_matches_chunk_text_for_single_turn():
     # a single-turn chunk's text is exactly that turn's formatted text,
     # so char_count (accumulated during the loop) must equal its length
     assert chunks[0].char_count == len(chunks[0].text)
+
+
+def test_tool_result_turn_rendered_with_honest_label():
+    from vidura.ingest import Turn
+    turns = [Turn(type="user", timestamp=None, text="ls output", tool_use=False, model=None, is_tool_result=True)]
+    chunks = chunk_turns(turns)
+    assert chunks[0].text.startswith("[tool_result]")
+    assert "[user]" not in chunks[0].text
+
+
+def test_long_tool_result_truncated_in_chunk():
+    from vidura.chunk import TOOL_RESULT_MAX_CHARS
+    from vidura.ingest import Turn
+    turns = [Turn(type="user", timestamp=None, text="x" * 5000, tool_use=False, model=None, is_tool_result=True)]
+    chunks = chunk_turns(turns)
+    assert "…[tool output truncated]" in chunks[0].text
+    assert len(chunks[0].text) < 5000
