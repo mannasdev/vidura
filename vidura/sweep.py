@@ -169,7 +169,7 @@ def _print_ledger_report(conn) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="vidura-sweep")
-    parser.add_argument("--full", action="store_true", help="run all batches (default: top %(default)s densest)")
+    parser.add_argument("--full", action="store_true", help=f"run all batches (default: top {DEFAULT_MAX_BATCHES} densest)")
     parser.add_argument("--batches", type=int, default=DEFAULT_MAX_BATCHES)
     parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
     parser.add_argument("--backend", choices=["auto", "claude", "ollama"], default=os.environ.get("VIDURA_REFLECTOR_BACKEND", "auto"))
