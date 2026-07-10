@@ -1,0 +1,283 @@
+"""Tests for vidura.executor — tier-dispatched action execution.
+
+All subprocess calls are mocked (no real pbcopy/brew/etc touches CI),
+confirm is always a fake callable (tests never touch a TTY), and any
+file writes land in tmp_path via monkeypatch.chdir.
+"""
+
+from unittest.mock import patch
+
+import pytest
+
+from vidura.executor import ExecutionDeclined, execute_action, execution_enabled
+from vidura.fix_index import Fix, FixAction
+from vidura.store import executions_for, open_db
+
+
+def _suggestion_row(conn, fix_id="missing-claude-md"):
+    from vidura.contract import Suggestion
+    from vidura.store import ledger_entries, record_suggestion, set_status
+
+    record_suggestion(
+        conn,
+        Suggestion(fix_id=fix_id, confidence=0.8, evidence=["q"], blunt_summary="summary"),
+    )
+    row = ledger_entries(conn)[0]
+    set_status(conn, row["id"], "accepted")
+    return ledger_entries(conn)[0]
+
+
+def _always_yes(prompt: str) -> bool:
+    return True
+
+
+def _always_no(prompt: str) -> bool:
+    return False
+
+
+def test_execution_enabled_default_true(monkeypatch):
+    monkeypatch.delenv("VIDURA_EXECUTION", raising=False)
+    assert execution_enabled() is True
+
+
+def test_execution_enabled_false_when_off(monkeypatch):
+    monkeypatch.setenv("VIDURA_EXECUTION", "off")
+    assert execution_enabled() is False
+
+
+def test_copy_pipes_payload_to_pbcopy(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "spec-before-code")
+    fix = Fix(
+        id="spec-before-code",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=1, label="Copy /office-hours", payload="/office-hours"),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        status = execute_action(conn, row, fix, confirm=_always_no)
+    assert status == "done"
+    mock_run.assert_called_once()
+    args, kwargs = mock_run.call_args
+    assert args[0] == ["pbcopy"]
+    assert kwargs["input"] == b"/office-hours"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+    assert rows[0]["tier"] == 1
+    conn.close()
+
+
+def test_write_appends_once_after_confirm_true(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=2, label="Write CLAUDE.md", payload="# Project\n", target_file="CLAUDE.md"),
+    )
+    status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "done"
+    target = tmp_path / "CLAUDE.md"
+    assert target.exists()
+    assert target.read_text() == "# Project\n"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+    assert rows[0]["tier"] == 2
+
+
+def test_write_confirm_false_declines_and_touches_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=2, label="Write CLAUDE.md", payload="# Project\n", target_file="CLAUDE.md"),
+    )
+    with pytest.raises(ExecutionDeclined):
+        execute_action(conn, row, fix, confirm=_always_no)
+    assert not (tmp_path / "CLAUDE.md").exists()
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "declined"
+
+
+def test_run_passes_argv_list_no_shell_and_records_exit_code(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "github-context-by-paste")
+    fix = Fix(
+        id="github-context-by-paste",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=3, label="Install gh", payload="", argv=["brew", "install", "gh"]),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "Installing gh...\n"
+        mock_run.return_value.stderr = ""
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "done"
+    args, kwargs = mock_run.call_args
+    assert args[0] == ["brew", "install", "gh"]
+    assert "shell" not in kwargs or kwargs["shell"] is False
+    assert kwargs["timeout"] == 300
+    assert kwargs["capture_output"] is True
+    rows = executions_for(conn, row["id"])
+    assert rows[0]["exit_code"] == 0
+    assert rows[0]["status"] == "done"
+
+
+def test_run_nonzero_exit_recorded_as_failed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "github-context-by-paste")
+    fix = Fix(
+        id="github-context-by-paste",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=3, label="Install gh", payload="", argv=["brew", "install", "gh"]),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = "brew: command not found\n"
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "failed"
+    rows = executions_for(conn, row["id"])
+    assert rows[0]["exit_code"] == 1
+    assert rows[0]["status"] == "failed"
+    assert "brew: command not found" in rows[0]["output_head"]
+
+
+def test_run_confirm_false_declines_and_never_runs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "github-context-by-paste")
+    fix = Fix(
+        id="github-context-by-paste",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=3, label="Install gh", payload="", argv=["brew", "install", "gh"]),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        with pytest.raises(ExecutionDeclined):
+            execute_action(conn, row, fix, confirm=_always_no)
+        mock_run.assert_not_called()
+    rows = executions_for(conn, row["id"])
+    assert rows[0]["status"] == "declined"
+
+
+def test_kill_switch_blocks_tier_two_and_three(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VIDURA_EXECUTION", "off")
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=2, label="Write CLAUDE.md", payload="# Project\n", target_file="CLAUDE.md"),
+    )
+    with pytest.raises(PermissionError):
+        execute_action(conn, row, fix, confirm=_always_yes)
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert executions_for(conn, row["id"]) == []
+
+
+def test_kill_switch_does_not_block_copy(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VIDURA_EXECUTION", "off")
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "spec-before-code")
+    fix = Fix(
+        id="spec-before-code",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=1, label="Copy /office-hours", payload="/office-hours"),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        status = execute_action(conn, row, fix, confirm=_always_no)
+    assert status == "done"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+
+
+def test_dry_run_records_nothing_and_touches_nothing_write(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=2, label="Write CLAUDE.md", payload="# Project\n", target_file="CLAUDE.md"),
+    )
+    status = execute_action(conn, row, fix, confirm=_always_yes, dry_run=True)
+    assert status == "dry-run"
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert executions_for(conn, row["id"]) == []
+
+
+def test_dry_run_records_nothing_run_tier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "github-context-by-paste")
+    fix = Fix(
+        id="github-context-by-paste",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=3, label="Install gh", payload="", argv=["brew", "install", "gh"]),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        status = execute_action(conn, row, fix, confirm=_always_yes, dry_run=True)
+        mock_run.assert_not_called()
+    assert status == "dry-run"
+    assert executions_for(conn, row["id"]) == []
+
+
+def test_dry_run_copy_does_not_touch_clipboard(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "spec-before-code")
+    fix = Fix(
+        id="spec-before-code",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=1, label="Copy /office-hours", payload="/office-hours"),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        status = execute_action(conn, row, fix, confirm=_always_yes, dry_run=True)
+        mock_run.assert_not_called()
+    assert status == "dry-run"
+    assert executions_for(conn, row["id"]) == []
