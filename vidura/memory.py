@@ -8,12 +8,18 @@ Agents read; only Vidura writes (remember_chunks/prune are called by the
 sweep only, never exposed via the context API).
 """
 
+import json
+import os
 import sqlite3
 import sys
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from vidura.store import fts_available
+
+SUPERMEMORY_CONTAINER_TAG = "vidura"
+SUPERMEMORY_TIMEOUT_SECONDS = 5
 
 
 @dataclass
@@ -23,6 +29,91 @@ class ChunkHit:
     text: str
     score: float
     created_at: str
+
+
+def _supermemory_config() -> tuple[str, str] | None:
+    """(base_url, api_key) if VIDURA_MEMORY_BACKEND=blend and a key is set, else None."""
+    if os.environ.get("VIDURA_MEMORY_BACKEND") != "blend":
+        return None
+    api_key = os.environ.get("SUPERMEMORY_CC_API_KEY")
+    if not api_key:
+        return None
+    url = os.environ.get("VIDURA_SUPERMEMORY_URL", "http://localhost:6767")
+    return (url, api_key)
+
+
+def _supermemory_request(cfg: tuple[str, str], method: str, path: str, body: dict | None = None) -> dict:
+    url, api_key = cfg
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(
+        url + path,
+        data=data,
+        method=method,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=SUPERMEMORY_TIMEOUT_SECONDS) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _supermemory_push(cfg: tuple[str, str], session_path: str, chunks: list[str], now: str) -> None:
+    # Best-effort mirror to the external store: never let a supermemory
+    # outage break remember_chunks (the local FTS5 write already happened).
+    try:
+        existing = _supermemory_request(
+            cfg,
+            "POST",
+            "/v3/documents/list",
+            {"filters": {"AND": [{"filterType": "metadata", "key": "session_path", "value": session_path}]}},
+        )
+        ids = [m["id"] for m in existing.get("memories", [])]
+        if ids:
+            _supermemory_request(cfg, "DELETE", "/v3/documents/bulk", {"ids": ids})
+        for text in chunks:
+            _supermemory_request(
+                cfg,
+                "POST",
+                "/v3/documents",
+                {
+                    "content": text,
+                    "containerTag": SUPERMEMORY_CONTAINER_TAG,
+                    "metadata": {"session_path": session_path, "created_at": now},
+                    "taskType": "memory",
+                },
+            )
+    except Exception as exc:
+        print(f"vidura: supermemory push failed, continuing FTS5-only ({exc})", file=sys.stderr)
+
+
+def _supermemory_search(cfg: tuple[str, str], terms: list[str], k: int, exclude_sessions: set[str]) -> list[ChunkHit]:
+    # Best-effort: any failure here just means search_chunks falls back to
+    # its FTS5 results, same contract as _supermemory_push.
+    try:
+        response = _supermemory_request(
+            cfg,
+            "POST",
+            "/v3/search",
+            {"containerTag": SUPERMEMORY_CONTAINER_TAG, "q": " ".join(terms)},
+        )
+    except Exception as exc:
+        print(f"vidura: supermemory search failed, continuing FTS5-only ({exc})", file=sys.stderr)
+        return []
+    hits: list[ChunkHit] = []
+    for result in response.get("results", []):
+        metadata = result.get("metadata") or {}
+        session_path = metadata.get("session_path")
+        if not session_path or session_path in exclude_sessions:
+            continue
+        for chunk in result.get("chunks", []):
+            hits.append(
+                ChunkHit(
+                    chunk_id=-1,
+                    session_path=session_path,
+                    text=chunk.get("content", ""),
+                    score=result.get("score", 0.0),
+                    created_at=metadata.get("created_at", ""),
+                )
+            )
+    return hits[:k]
 
 
 def remember_chunks(
@@ -43,6 +134,9 @@ def remember_chunks(
         [(session_path, text, t, now) for text, t in zip(chunks, turns)],
     )
     conn.commit()
+    cfg = _supermemory_config()
+    if cfg is not None and chunks:
+        _supermemory_push(cfg, session_path, chunks, now)
 
 
 def _fts_query(terms: list[str]) -> str:
@@ -81,10 +175,24 @@ def search_chunks(
             f"WHERE text LIKE ?{exclusion_sql_like} ORDER BY id DESC LIMIT ?",
             (f"%{first}%", *ordered_exclude, k),
         ).fetchall()
-    return [
+    fts_hits = [
         ChunkHit(r["id"], r["session_path"], r["text"], r["score"], r["created_at"])
         for r in rows
     ]
+    cfg = _supermemory_config()
+    if cfg is None:
+        return fts_hits
+    seen = {(h.session_path, h.text) for h in fts_hits}
+    merged = list(fts_hits)
+    for hit in _supermemory_search(cfg, terms, k=k, exclude_sessions=exclude):
+        identity = (hit.session_path, hit.text)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(hit)
+        if len(merged) >= k:
+            break
+    return merged[:k]
 
 
 def prune_chunks(conn: sqlite3.Connection, days: int = 90) -> int:

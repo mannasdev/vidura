@@ -85,6 +85,13 @@ weeks, not just within one report. And accepted suggestions are tracked
 for follow-through — if the targeted friction actually drops, the ledger
 upgrades them to `adopted`; if two weeks pass unchanged, `lapsed`.
 
+Set `VIDURA_MEMORY_BACKEND=blend` (plus `SUPERMEMORY_CC_API_KEY`, and
+optionally `VIDURA_SUPERMEMORY_URL`, default `http://localhost:6767`) to
+blend in semantic retrieval from a local [supermemory](https://supermemory.ai)
+instance alongside FTS5. Optional and additive — unset, everything behaves
+exactly as before. Falls back to FTS5-only silently if supermemory is
+unreachable.
+
 ## Acting on suggestions
 
 Some fixes carry an executable action — Vidura can do the remedy, not
