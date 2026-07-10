@@ -78,6 +78,13 @@ vidura-ledger accept 3    # mark suggestion 3 accepted
 vidura-ledger dismiss 3   # dismissed suggestions are NEVER re-suggested
 ```
 
+Swept sessions also feed a persistent chunk memory (SQLite FTS5): each
+new reflection retrieves "similar past friction" from your history and
+shows it to the reflector, so recurring patterns get recognized across
+weeks, not just within one report. And accepted suggestions are tracked
+for follow-through — if the targeted friction actually drops, the ledger
+upgrades them to `adopted`; if two weeks pass unchanged, `lapsed`.
+
 State lives in `~/Library/Application Support/Vidura/vidura.db`
 (override with `VIDURA_DB_PATH`; delete the folder to erase everything).
 Sessions already reflected are skipped on the next run, so the first
