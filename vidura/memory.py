@@ -192,7 +192,10 @@ def _supermemory_search(cfg: tuple[str, str], terms: list[str], k: int, exclude_
             cfg,
             "POST",
             "/v3/search",
-            {"containerTag": SUPERMEMORY_CONTAINER_TAG, "q": " ".join(terms)},
+            # containerTags MUST be plural here: the live server's /v3/search
+            # silently returns zero results for a singular "containerTag" key
+            # (no error) — verified against supermemory-local, 2026-07-11.
+            {"containerTags": [SUPERMEMORY_CONTAINER_TAG], "q": " ".join(terms)},
         )
     except Exception as exc:
         if not _breaker_tripped:

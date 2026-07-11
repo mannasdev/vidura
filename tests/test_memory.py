@@ -185,7 +185,9 @@ def test_search_chunks_parses_hits(monkeypatch, tmp_path):
 
     def fake_request(cfg, method, path, body=None):
         assert path == "/v3/search"
-        assert body["containerTag"] == "vidura"
+        # Plural, live-verified 2026-07-11: singular "containerTag" makes the
+        # local server return zero results silently.
+        assert body["containerTags"] == ["vidura"]
         return _search_response(
             [
                 {
