@@ -53,6 +53,14 @@ class Fix:
     remedy: str
     confidence_floor: float
     action: FixAction | None = None
+    # follow_through.py's "tool-usage" metric: the tool name (e.g.
+    # "playwright") this fix's action installs. A session counts as
+    # "used the tool" when any of its signals.tools_used keys contain
+    # this string case-insensitively — sessions.tools_used records raw
+    # tool_use names verbatim (e.g. "mcp__playwright__click"), so a
+    # substring match is what makes "playwright" match every MCP tool
+    # under that server without hardcoding each one.
+    adoption_tool: str | None = None
 
 
 FIX_INDEX: list[Fix] = [
@@ -243,6 +251,7 @@ FIX_INDEX: list[Fix] = [
             verify_argv=["claude", "mcp", "list"],
             verify_expect="playwright",
         ),
+        adoption_tool="playwright",
     ),
     Fix(
         id="github-context-by-paste",
