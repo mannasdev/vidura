@@ -4,7 +4,7 @@
 install:
 	python3.11 -m venv .venv || python3 -m venv .venv
 	.venv/bin/pip install -q -e ".[dev]"
-	@echo "✓ installed. Try: .venv/bin/vidura-report  (needs Claude Code or Ollama)"
+	@echo "✓ installed. Try: .venv/bin/vidura-report  (needs Claude Code)"
 
 test:
 	.venv/bin/pytest -q

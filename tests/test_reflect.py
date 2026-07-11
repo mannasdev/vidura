@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vidura.contract import CONTRACT_VERSION, ReflectRequest
-from vidura.reflect import ReflectorError, build_prompt, call_ollama, parse_suggestions, reflect
+from vidura.reflect import ReflectorError, build_prompt, parse_suggestions, reflect
 
 
 def _request(chunks=None, fix_index=None):
@@ -71,43 +71,20 @@ def test_parse_suggestions_caps_at_three():
     assert len(suggestions) == 3
 
 
-def test_reflect_returns_suggestions_from_mocked_ollama():
+def test_reflect_returns_suggestions_from_mocked_claude_cli():
     mock_response = json.dumps([
         {"fix_id": "judge-executor-split", "confidence": 0.85, "evidence": ["you re-prompted 3x"], "blunt_summary": "split judge/executor"}
     ])
-    with patch("vidura.reflect.call_ollama", return_value=mock_response):
-        response = reflect(_request(), backend="ollama")
+    with patch("vidura.reflect.call_claude_cli", return_value=mock_response):
+        response = reflect(_request())
     assert response.contract_version == CONTRACT_VERSION
     assert len(response.suggestions) == 1
 
 
-def test_reflect_raises_reflector_error_when_ollama_call_fails():
-    with patch("vidura.reflect.call_ollama", side_effect=ReflectorError("unreachable")):
+def test_reflect_raises_reflector_error_when_claude_cli_call_fails():
+    with patch("vidura.reflect.call_claude_cli", side_effect=ReflectorError("claude CLI not found on PATH")):
         with pytest.raises(ReflectorError):
-            reflect(_request(), backend="ollama")
-
-
-def test_reflect_routes_to_claude_backend():
-    mock_response = json.dumps({"suggestions": [
-        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": ["quote"], "blunt_summary": "split"}
-    ]})
-    with patch("vidura.reflect.call_claude_cli", return_value=mock_response) as mock_claude:
-        response = reflect(_request(), backend="claude")
-    mock_claude.assert_called_once()
-    assert len(response.suggestions) == 1
-
-
-def test_reflect_unknown_backend_raises():
-    with pytest.raises(ReflectorError):
-        reflect(_request(), backend="gpt9000")
-
-
-def test_resolve_backend_auto_prefers_claude_when_present():
-    from vidura.reflect import resolve_backend
-    with patch("vidura.reflect.shutil.which", return_value="/usr/local/bin/claude"):
-        assert resolve_backend("auto") == "claude"
-    with patch("vidura.reflect.shutil.which", return_value=None):
-        assert resolve_backend("auto") == "ollama"
+            reflect(_request())
 
 
 def test_call_claude_cli_missing_binary_raises():
@@ -147,25 +124,6 @@ def test_call_claude_cli_restricts_tools_and_turns():
     assert argv[argv.index("--max-turns") + 1] == "1"
     assert "--disallowedTools" in argv
     assert argv[argv.index("--disallowedTools") + 1] == "*"
-
-
-def _mock_urlopen(body_bytes):
-    cm = MagicMock()
-    cm.__enter__.return_value.read.return_value = body_bytes
-    cm.__exit__.return_value = False
-    return cm
-
-
-def test_call_ollama_non_json_body_raises_reflector_error():
-    with patch("urllib.request.urlopen", return_value=_mock_urlopen(b"<html>502 Bad Gateway</html>")):
-        with pytest.raises(ReflectorError):
-            call_ollama("prompt")
-
-
-def test_call_ollama_non_dict_body_raises_reflector_error():
-    with patch("urllib.request.urlopen", return_value=_mock_urlopen(json.dumps(["a", "b"]).encode("utf-8"))):
-        with pytest.raises(ReflectorError):
-            call_ollama("prompt")
 
 
 def test_parse_suggestions_skips_non_dict_items():

@@ -1,24 +1,19 @@
 """The reflection judgment core.
 
-Prompt skeleton matches the original spec's §4.5 draft. call_ollama
-enforces the 60s default timeout (design doc Eng Review Finding 2) via
-urllib's built-in timeout — a TimeoutError or URLError there becomes a
-ReflectorError, which the CLI (Task 9) catches and degrades to silence,
-per design doc Premise #4.
+Prompt skeleton matches the original spec's §4.5 draft. claude -p is the
+only judgment backend — call_claude_cli enforces CLAUDE_CLI_TIMEOUT_SECONDS
+via subprocess's built-in timeout — a TimeoutExpired or OSError there
+becomes a ReflectorError, which the CLI (Task 9) catches and degrades to
+silence, per design doc Premise #4.
 """
 
 import json
 import shutil
 import subprocess
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 from vidura.contract import CONTRACT_VERSION, ReflectRequest, ReflectResponse, Suggestion
-
-OLLAMA_DEFAULT_URL = "http://localhost:11434/api/generate"
-OLLAMA_DEFAULT_MODEL = "qwen2.5:14b"
 
 CLAUDE_CLI_DEFAULT_MODEL = "sonnet"
 CLAUDE_CLI_TIMEOUT_SECONDS = 180
@@ -30,12 +25,6 @@ CLAUDE_CLI_TIMEOUT_SECONDS = 180
 # project dir containing this token, which find_recent_sessions excludes.
 CLAUDE_CLI_CWD = Path.home() / ".vidura" / "reflector-cwd"
 CLAUDE_CLI_CWD_TOKEN = "-vidura-reflector-cwd"
-
-# The prompt regularly exceeds Ollama's 4096-token default context window;
-# without an explicit num_ctx the tail of the transcript silently evicts
-# the instructions and the model continues the conversation instead of
-# judging it (observed live in the first M0 run).
-OLLAMA_NUM_CTX = 16384
 
 SYSTEM_PROMPT = """You are Vidura, a frank counselor. You read a developer's recent AI
 coding sessions and identify at most 3 friction patterns where a known
@@ -86,37 +75,6 @@ def build_prompt(request: ReflectRequest) -> str:
         f"<ledger>\n{ledger_text}\n</ledger>\n\n"
         f"{CLOSING_INSTRUCTION}\n"
     )
-
-
-def call_ollama(
-    prompt: str,
-    model: str = OLLAMA_DEFAULT_MODEL,
-    url: str = OLLAMA_DEFAULT_URL,
-    timeout_seconds: int = 60,
-) -> str:
-    body = json.dumps(
-        {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            "options": {"num_ctx": OLLAMA_NUM_CTX},
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise ReflectorError(f"ollama unreachable or timed out: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise ReflectorError(f"ollama returned a non-JSON body: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ReflectorError("ollama returned a JSON body that was not an object")
-    response_text = payload.get("response")
-    if not response_text:
-        raise ReflectorError("ollama returned no response text")
-    return response_text
 
 
 def call_claude_cli(
@@ -240,36 +198,17 @@ def parse_suggestions(
     return suggestions[:3]
 
 
-def resolve_backend(backend: str = "auto") -> str:
-    """auto → claude if the CLI is installed (the target user's default),
-    else ollama (the pure-local fallback)."""
-    if backend == "auto":
-        return "claude" if shutil.which("claude") else "ollama"
-    if backend in ("claude", "ollama"):
-        return backend
-    raise ReflectorError(f"unknown reflector backend: {backend!r}")
-
-
 def reflect(
     request: ReflectRequest,
     model: str | None = None,
     timeout_seconds: int | None = None,
-    backend: str = "auto",
 ) -> ReflectResponse:
-    resolved = resolve_backend(backend)
     prompt = build_prompt(request)
-    if resolved == "claude":
-        raw_response = call_claude_cli(
-            prompt,
-            model=model or CLAUDE_CLI_DEFAULT_MODEL,
-            timeout_seconds=timeout_seconds or CLAUDE_CLI_TIMEOUT_SECONDS,
-        )
-    else:
-        raw_response = call_ollama(
-            prompt,
-            model=model or OLLAMA_DEFAULT_MODEL,
-            timeout_seconds=timeout_seconds or 60,
-        )
+    raw_response = call_claude_cli(
+        prompt,
+        model=model or CLAUDE_CLI_DEFAULT_MODEL,
+        timeout_seconds=timeout_seconds or CLAUDE_CLI_TIMEOUT_SECONDS,
+    )
     confidence_floor_by_fix = {
         f["id"]: f["confidence_floor"] for f in request.fix_index
     }

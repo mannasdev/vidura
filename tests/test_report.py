@@ -130,7 +130,7 @@ def test_print_report_degrades_to_silence_on_reflector_error(capsys):
         fix_index=[],
         ledger=[],
     )
-    with patch("vidura.report.reflect", side_effect=ReflectorError("ollama down")):
+    with patch("vidura.report.reflect", side_effect=ReflectorError("claude CLI unavailable")):
         exit_code = print_report(request)
     assert exit_code == 0
     assert "No suggestions" in capsys.readouterr().out

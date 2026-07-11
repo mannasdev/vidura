@@ -6,10 +6,10 @@ Contract version mismatch and unparseable stdin both fail LOUDLY
 (non-zero exit, stderr message) — these are caller-side bugs, not
 judgment-unavailable cases, so they must NOT degrade to silence.
 
-Every reflector failure (Ollama unreachable, timeout, malformed model
+Every reflector failure (claude CLI missing, timeout, malformed model
 output) degrades to silence per design doc Premise #4: empty
 suggestions list, exit 0. This is a broad `except Exception`, not just
-ReflectorError — network/parsing exceptions can escape reflect()'s own
+ReflectorError — subprocess/parsing exceptions can escape reflect()'s own
 net and must still degrade rather than crash the caller.
 """
 
@@ -66,7 +66,6 @@ def main(argv: list[str] | None = None) -> int:
         # Design doc Premise #4: judgment-unavailable must never crash the
         # tool. ReflectorError covers the reflector's own known failure
         # modes, but exceptions can still escape it (e.g. a
-        # ConnectionResetError from call_ollama's networking, or a
         # KeyError from a malformed fix_index entry in reflect()) — any of
         # those must degrade to silence too, not propagate.
         print(f"vidura-reflect: degrading to silence (unexpected error): {exc}", file=sys.stderr)

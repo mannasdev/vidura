@@ -6,13 +6,13 @@ Design doc Next Steps #3 and Eng Review Findings 1, 2, 4, 7:
   reflector stays a pure function, JSON in, JSON out.
 - payload budget: enforced before the payload is built, so a long
   session can't silently overflow the reflector model's context window.
-- timeout: enforced by the caller (Task 8's Ollama call), not here.
+- timeout: enforced by the caller (Task 8's claude -p call), not here.
 
 PAYLOAD_BUDGET_CHARS is the one operative default, shared by both
 callers (vidura/cli.py and vidura/report.py) so they can't silently
-re-cut an already-budgeted payload to a smaller size. It reflects the
-reflector's 16384-token context window (reflect.OLLAMA_NUM_CTX), which
-comfortably fits ~48k chars of chunks plus prompt scaffolding.
+re-cut an already-budgeted payload to a smaller size. It comfortably
+fits ~48k chars of chunks plus prompt scaffolding within the reflector's
+context window.
 DEFAULT_PAYLOAD_BUDGET_CHARS is kept as an alias for callers/tests that
 still reference the old name.
 """

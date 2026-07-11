@@ -14,12 +14,10 @@ own advice, and a read-only memory API your other agents can draw on.
 CLI-complete (M0 + sweep + ledger). `vidura-report` runs one reflection
 pass; `vidura-sweep` covers your whole 30-day window in batches and
 persists results to a ledger with accept/dismiss feedback. Everything is
-local except the reflection call itself, which by default goes through
-your own Claude Code CLI (`claude -p`, sandboxed: no tools, one turn).
-The transcripts being judged are conversations you already had with
-Claude, and they pass a redaction gate first regardless. Prefer fully
-local? `VIDURA_REFLECTOR_BACKEND=ollama` uses a local model instead —
-judgment quality is noticeably lower (we measured).
+local except the reflection call itself, which goes through your own
+Claude Code CLI (`claude -p`, sandboxed: no tools, one turn). The
+transcripts being judged are conversations you already had with Claude,
+and they pass a redaction gate first regardless.
 
 No menubar app yet — that's M3 (see Roadmap).
 
@@ -27,8 +25,7 @@ No menubar app yet — that's M3 (see Roadmap).
 
 - Python 3.11+
 - [Claude Code](https://claude.com/claude-code) installed and authenticated
-  (the default reflector backend) — **or** [Ollama](https://ollama.com)
-  with a model pulled for the pure-local fallback
+  (the reflector backend)
 
 ## Roadmap
 
@@ -183,6 +180,5 @@ judge/executor split miss described in the project's design doc.
 kill criterion: **stop here.** Do not proceed to M1 (SQLite, the
 Watcher, the Swift shell). Diagnose whether the blocker is chunking
 granularity (`vidura/chunk.py`'s `CHUNK_TARGET_CHARS`, design doc Open
-Question #3) or the judgment-model floor (design doc Open Question #1 —
-try a larger local model or the Anthropic API path) before touching the
-prompt again.
+Question #3) or the model floor (design doc Open Question #1) before
+touching the prompt again.

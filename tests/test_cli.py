@@ -56,7 +56,7 @@ def test_non_object_json_on_stdin_fails_loudly(monkeypatch, capsys):
 
 def test_reflector_error_degrades_to_silence(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(_valid_payload())))
-    with patch("vidura.cli.reflect", side_effect=ReflectorError("ollama down")):
+    with patch("vidura.cli.reflect", side_effect=ReflectorError("claude CLI unavailable")):
         exit_code = main()
     assert exit_code == 0
     out = json.loads(capsys.readouterr().out)

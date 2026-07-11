@@ -9,7 +9,6 @@ sweep (session limit, ctrl-C) resumes where it left off.
 """
 
 import argparse
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -170,7 +169,6 @@ def _batch_request(conn, batch: list[SessionWork]) -> ReflectRequest:
 def run_sweep(
     conn,
     batches: list[list[SessionWork]],
-    backend: str = "auto",
     max_batches: int | None = None,
 ) -> dict:
     stats = {"batches_run": 0, "batches_failed": 0, "sessions_reflected": 0, "suggestions_recorded": 0}
@@ -178,7 +176,7 @@ def run_sweep(
     for i, batch in enumerate(selected, start=1):
         request = _batch_request(conn, batch)
         try:
-            response = reflect(request, backend=backend)
+            response = reflect(request)
             for suggestion in response.suggestions:
                 record_suggestion(conn, suggestion)
                 stats["suggestions_recorded"] += 1
@@ -252,7 +250,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--full", action="store_true", help=f"run all batches (default: top {DEFAULT_MAX_BATCHES} densest)")
     parser.add_argument("--batches", type=int, default=DEFAULT_MAX_BATCHES)
     parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
-    parser.add_argument("--backend", choices=["auto", "claude", "ollama"], default=os.environ.get("VIDURA_REFLECTOR_BACKEND", "auto"))
     parser.add_argument(
         "--rescan",
         action="store_true",
@@ -280,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         batches = pack_batches(work)
         max_batches = None if args.full else args.batches
-        stats = run_sweep(conn, batches, backend=args.backend, max_batches=max_batches)
+        stats = run_sweep(conn, batches, max_batches=max_batches)
         print(
             f"Sweep: {stats['batches_run']} batches run, {stats['batches_failed']} failed, "
             f"{stats['sessions_reflected']} sessions reflected, "

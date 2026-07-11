@@ -13,7 +13,6 @@ repeated error) contribute chunks to the payload — this keeps the
 payload budget (Task 7) spent on signal, not on every routine session.
 """
 
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -133,9 +132,9 @@ def build_report_request(
     )
 
 
-def print_report(request: ReflectRequest, backend: str = "auto", blocked: set[str] | None = None) -> int:
+def print_report(request: ReflectRequest, blocked: set[str] | None = None) -> int:
     try:
-        response = reflect(request, backend=backend)
+        response = reflect(request)
     except ReflectorError as exc:
         print(f"vidura report: degrading to silence: {exc}", file=sys.stderr)
         print("No suggestions this run (reflector unavailable).")
@@ -144,7 +143,6 @@ def print_report(request: ReflectRequest, backend: str = "auto", blocked: set[st
         # Design doc Premise #4: judgment-unavailable must never crash the
         # tool. ReflectorError covers the reflector's own known failure
         # modes, but exceptions can still escape it (e.g. a
-        # ConnectionResetError from call_ollama's networking, or a
         # KeyError from a malformed fix_index entry in reflect()) — any of
         # those must degrade to silence too, not propagate.
         print(f"vidura report: degrading to silence (unexpected error): {exc}", file=sys.stderr)
@@ -176,7 +174,6 @@ def print_report(request: ReflectRequest, backend: str = "auto", blocked: set[st
 
 
 def main() -> int:
-    backend = os.environ.get("VIDURA_REFLECTOR_BACKEND", "auto")
     sessions = find_recent_sessions()
     if not sessions:
         print(f"No Claude Code sessions found in the last {DEFAULT_WINDOW_DAYS} days.")
@@ -186,7 +183,7 @@ def main() -> int:
         ledger = ledger_summary_for_prompt(conn)
         request = build_report_request(sessions, ledger=ledger)
         blocked = blocked_fix_ids(conn)
-        return print_report(request, backend=backend, blocked=blocked)
+        return print_report(request, blocked=blocked)
     finally:
         conn.close()
 
