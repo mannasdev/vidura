@@ -31,7 +31,49 @@ public enum ViduraCore {
     ///   1. $VIDURA_BIN/<tool>            — explicit override
     ///   2. `/usr/bin/env <tool>` via PATH — normal installed CLI
     ///   3. ~/Desktop/Projects/vidura/.venv/bin/<tool> — dev fallback
+    ///
+    /// Cached per tool name after the first successful resolution: `run`
+    /// calls this from concurrent background-queue Tasks (StateModel's
+    /// poll timer, sweep timer, and user-triggered ledger actions can all
+    /// be in flight together), and re-shelling `/usr/bin/which` on every
+    /// single CLI call is wasted work for a path that essentially never
+    /// changes mid-session. Guarded by `cacheLock`, not @MainActor,
+    /// because callers run on arbitrary utility-QoS queues.
     static func binPath(_ tool: String) -> String? {
+        cacheLock.lock()
+        if let cached = resolvedPaths[tool] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        guard let resolved = resolveBinPath(tool) else { return nil }
+
+        cacheLock.lock()
+        resolvedPaths[tool] = resolved
+        cacheLock.unlock()
+        return resolved
+    }
+
+    /// Serializes access to `resolvedPaths`. A plain NSLock is enough —
+    /// resolution itself (a few filesystem checks plus, at worst, one
+    /// `/usr/bin/which` shell-out) is short, and callers never hold the
+    /// lock while doing that work.
+    private static let cacheLock = NSLock()
+    private static var resolvedPaths: [String: String] = [:]
+
+    /// Test-only: drop the cache and remove any injected resolver so
+    /// each test starts from a clean slate.
+    static func resetBinPathCacheForTesting() {
+        cacheLock.lock()
+        resolvedPaths.removeAll()
+        cacheLock.unlock()
+        whichResolver = defaultWhichResolver
+    }
+
+    /// The actual (uncached) resolution logic, factored out of `binPath`
+    /// so the cache wrapper above stays a thin lock+dictionary shim.
+    private static func resolveBinPath(_ tool: String) -> String? {
         let fm = FileManager.default
 
         if let binDir = ProcessInfo.processInfo.environment["VIDURA_BIN"] {
@@ -54,10 +96,24 @@ public enum ViduraCore {
         return nil
     }
 
+    /// Injectable seam for tests: the default implementation shells out
+    /// to `/usr/bin/which`; tests can swap in a spy to count invocations
+    /// or simulate a hang without touching the real filesystem/PATH.
+    static var whichResolver: (String) -> String? = defaultWhichResolver
+
     /// Resolve `tool` against PATH without actually running it, using
     /// /usr/bin/which — which is always present on macOS, performs a
     /// pure PATH lookup, and never executes the target.
     private static func resolveViaEnv(_ tool: String) -> String? {
+        whichResolver(tool)
+    }
+
+    /// Default `whichResolver`: shells out to `/usr/bin/which` with the
+    /// same bounded deadline-poll pattern `run(_:arguments:timeout:)`
+    /// uses, so a hung or misbehaving `which` can never block `binPath`
+    /// (and therefore every CLI call) forever. Short deadline — this is
+    /// a pure PATH lookup, not real work.
+    private static let defaultWhichResolver: (String) -> String? = { tool in
         let which = Process()
         which.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         which.arguments = [tool]
@@ -66,18 +122,27 @@ public enum ViduraCore {
         which.standardError = Pipe()
         do {
             try which.run()
-            which.waitUntilExit()
-            guard which.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let path, !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) else {
-                return nil
-            }
-            return path
         } catch {
             return nil
         }
+
+        let deadline = Date().addingTimeInterval(5)
+        while which.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if which.isRunning {
+            which.terminate()
+            return nil
+        }
+
+        guard which.terminationStatus == 0 else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let path = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let path, !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) else {
+            return nil
+        }
+        return path
     }
 
     /// Run `tool` with `arguments`, off the calling thread. Never call
@@ -127,7 +192,22 @@ public enum ViduraCore {
             Thread.sleep(forTimeInterval: 0.05)
         }
         if process.isRunning {
+            // SIGTERM first, but a child that traps or ignores it (or is
+            // itself stuck past signal delivery, e.g. blocked in a
+            // syscall) would otherwise leak as a hung, unreachable
+            // process forever. Give it a short grace period to exit
+            // cleanly, then escalate to SIGKILL, which cannot be
+            // caught or ignored, and reap so it doesn't linger as a
+            // zombie.
             process.terminate()
+            let killDeadline = Date().addingTimeInterval(2)
+            while process.isRunning && Date() < killDeadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             throw CoreError.timedOut(tool)

@@ -112,9 +112,7 @@ public enum Mood: String {
     case concerned = "CONCERNED"
 
     /// The menu bar glyph is fixed and does NOT vary by mood — see
-    /// `AppDelegate`. It is rendered in code from the same pixel-art
-    /// creature as the popover header; see `PixelPetMenuBarMark` in
-    /// PixelPet.swift.
+    /// `AppDelegate.menuBarImage(withBadge:)`, which draws it in code.
 }
 
 /// Accepted/dismissed counts for the footer's "Last counsel · …" line

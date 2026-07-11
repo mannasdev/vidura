@@ -209,6 +209,11 @@ public final class StateModel: ObservableObject {
     /// Runs vidura-sweep in the background at .utility QoS every 30
     /// minutes. Skips if one is already in flight so overlapping sweeps
     /// never stack up.
+    ///
+    /// `sweepInFlight` is only an in-process guard — it says nothing
+    /// about the hook CLI's own sweep running concurrently in a separate
+    /// process. Cross-process coordination lives inside vidura-sweep
+    /// itself (a Python-side lock), not here.
     public func runAmbientSweep() {
         guard !sweepInFlight else { return }
         sweepInFlight = true
