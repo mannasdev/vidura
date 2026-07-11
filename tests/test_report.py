@@ -173,6 +173,55 @@ def test_print_report_prints_suggestion_details(capsys):
     assert "you re-prompted 3x" in out
 
 
+def test_build_report_request_includes_tool_error_repeats_in_signals(tmp_path):
+    session = tmp_path / "session.jsonl"
+    ts = "2026-07-01T10:00:00.000Z"
+    tool_result_turn = {
+        "type": "user",
+        "timestamp": ts,
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "content": "Error: connection refused on port 5432"}],
+        },
+    }
+    _write_session(session, [
+        _user_turn("do a thing", ts),
+        _user_turn("no not like that", ts),
+        tool_result_turn,
+        tool_result_turn,
+        tool_result_turn,
+        _assistant_turn("using a tool now", ts, tool_use=True),
+    ])
+    request = build_report_request([session])
+    assert len(request.signals["tool_error_repeats"]) == 1
+    assert list(request.signals["tool_error_repeats"].values())[0] == 3
+
+
+def test_build_report_request_tool_error_repeats_alone_excludes_chunks(tmp_path):
+    """A session whose only friction is a tool_result error (no
+    reprompt streak, no assistant-turn error) must not contribute
+    chunks — tool_error_repeats never gates inclusion."""
+    session = tmp_path / "session.jsonl"
+    ts = "2026-07-01T10:00:00.000Z"
+    tool_result_turn = {
+        "type": "user",
+        "timestamp": ts,
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "content": "Error: boom\nTraceback (most recent call last):"}],
+        },
+    }
+    _write_session(session, [
+        _user_turn("run the tests", ts),
+        tool_result_turn,
+        tool_result_turn,
+        tool_result_turn,
+        _assistant_turn("done", ts, tool_use=True),
+    ])
+    request = build_report_request([session])
+    assert request.chunks == []
+
+
 def test_main_no_sessions_found(monkeypatch, capsys):
     monkeypatch.setattr("vidura.report.find_recent_sessions", lambda: [])
     exit_code = main()

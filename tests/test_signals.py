@@ -108,3 +108,50 @@ def test_tool_result_turns_do_not_count_in_streaks():
     ]
     signals = extract_signals(turns)
     assert signals.reprompt_streaks == []
+
+
+def _tool_result_turn(text):
+    return Turn(type="user", timestamp=None, text=text, tool_use=False, model=None, is_tool_result=True)
+
+
+def test_tool_result_error_repeated_three_plus_counted_separately():
+    turns = [
+        _tool_result_turn("Error: connection refused on port 5432"),
+        _tool_result_turn("Error: connection refused on port 5432"),
+        _tool_result_turn("Error: connection refused on port 5432"),
+    ]
+    signals = extract_signals(turns)
+    assert len(signals.tool_error_repeats) == 1
+    assert list(signals.tool_error_repeats.values())[0] == 3
+    # must NOT bleed into the assistant-turn error_repeats signal
+    assert signals.error_repeats == {}
+
+
+def test_tool_result_errors_do_not_gate_or_pollute_error_repeats():
+    """tool_error_repeats is a separate, judge-visibility-only signal —
+    it must never merge into error_repeats (which gates session
+    inclusion in sweep.py/report.py and feeds character.py's robot
+    threshold)."""
+    turns = [
+        _tool_result_turn("Error: from tool a"),
+        _tool_result_turn("Error: from tool a"),
+        _tool_result_turn("Error: from tool a"),
+        _turn("assistant", "Error: from assistant"),
+        _turn("assistant", "Error: from assistant"),
+        _turn("assistant", "Error: from assistant"),
+    ]
+    signals = extract_signals(turns)
+    assert len(signals.error_repeats) == 1
+    assert len(signals.tool_error_repeats) == 1
+    # values track their own source only
+    assert list(signals.error_repeats.values())[0] == 3
+    assert list(signals.tool_error_repeats.values())[0] == 3
+
+
+def test_tool_result_error_seen_twice_not_reported():
+    turns = [
+        _tool_result_turn("Error: timeout"),
+        _tool_result_turn("Error: timeout"),
+    ]
+    signals = extract_signals(turns)
+    assert signals.tool_error_repeats == {}

@@ -136,3 +136,59 @@ def test_mixed_text_and_tool_result_counts_as_human(tmp_path):
     path = _write_jsonl(tmp_path, [line])
     turns = list(parse_session(path))
     assert turns[0].is_tool_result is False
+
+
+def test_tool_result_list_shaped_content_extracted(tmp_path):
+    """Claude Code sometimes delivers tool_result content as a list of
+    blocks (mirroring assistant message content) rather than a plain
+    string — a naive isinstance(..., str) check silently dropped this
+    shape entirely, hiding tracebacks/errors that arrived this way from
+    both chunking and signal extraction."""
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": [
+                {"type": "text", "text": "Traceback (most recent call last):\nError: boom"},
+            ]},
+        ]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_tool_result is True
+    assert "Traceback (most recent call last):" in turns[0].text
+    assert "Error: boom" in turns[0].text
+
+
+def test_tool_result_list_shaped_multiple_text_blocks_concatenated(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": [
+                {"type": "text", "text": "first part"},
+                {"type": "text", "text": "second part"},
+            ]},
+        ]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert "first part" in turns[0].text
+    assert "second part" in turns[0].text
+
+
+def test_tool_result_list_shaped_ignores_non_text_blocks(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": [
+                {"type": "image", "source": {"data": "base64stuff"}},
+                {"type": "text", "text": "the actual text"},
+            ]},
+        ]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].text == "the actual text"
+    assert "base64stuff" not in turns[0].text

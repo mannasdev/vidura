@@ -20,6 +20,21 @@ class SessionSignals:
     duration_seconds: float | None
     models_used: list[str]
     turn_count: int
+    # Errors seen inside tool_result turns (e.g. a traceback in command
+    # output) — counted the same way as error_repeats (ERROR_MARKERS,
+    # _error_key, 3+ threshold) but kept in a SEPARATE field on purpose.
+    # This is judge-visibility only: unlike error_repeats it must never
+    # gate session inclusion (sweep.py's has_friction stays
+    # streaks-or-error_repeats) and must never feed character.py's robot
+    # threshold or mood — tool output is machine noise (retry loops,
+    # verbose build/test spam) and folding it into the same signal that
+    # drives inclusion/character would re-import exactly the kind of
+    # noise is_tool_result was introduced to keep out of the streak count.
+    tool_error_repeats: dict[str, int] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.tool_error_repeats is None:
+            self.tool_error_repeats = {}
 
 
 def _parse_ts(ts: str | None) -> datetime | None:
@@ -40,6 +55,7 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
     reprompt_streaks: list[int] = []
     current_streak = 0
     error_counts: dict[str, int] = {}
+    tool_error_counts: dict[str, int] = {}
     models: set[str] = set()
     timestamps: list[datetime] = []
 
@@ -56,6 +72,17 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
             # (observed in M0). They are transparent to the streak.
             if not turn.is_tool_result:
                 current_streak += 1
+            elif turn.is_tool_result:
+                # ERROR_MARKERS scanning previously only ran on assistant
+                # turns, blind to tracebacks that arrive as tool_result
+                # content (e.g. a failing test's stderr echoed back by
+                # the tool). Counted into a SEPARATE dict — see
+                # SessionSignals.tool_error_repeats docstring for why
+                # this must not merge into error_counts.
+                for marker in ERROR_MARKERS:
+                    if marker in turn.text:
+                        key = _error_key(turn.text, marker)
+                        tool_error_counts[key] = tool_error_counts.get(key, 0) + 1
         elif turn.type == "assistant":
             if turn.tool_use:
                 if current_streak >= 2:
@@ -74,6 +101,7 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
         duration = (max(timestamps) - min(timestamps)).total_seconds()
 
     repeated_errors = {k: v for k, v in error_counts.items() if v >= 3}
+    repeated_tool_errors = {k: v for k, v in tool_error_counts.items() if v >= 3}
 
     return SessionSignals(
         reprompt_streaks=reprompt_streaks,
@@ -81,4 +109,5 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
         duration_seconds=duration,
         models_used=sorted(models),
         turn_count=len(turns),
+        tool_error_repeats=repeated_tool_errors,
     )

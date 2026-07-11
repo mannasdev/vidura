@@ -64,6 +64,7 @@ def build_report_request(
     sessions_scanned = 0
     all_reprompt_streaks: list[int] = []
     all_error_repeats: dict[str, int] = {}
+    all_tool_error_repeats: dict[str, int] = {}
     all_models: set[str] = set()
 
     for path in session_paths:
@@ -78,6 +79,12 @@ def build_report_request(
         all_reprompt_streaks.extend(signals.reprompt_streaks)
         for key, count in signals.error_repeats.items():
             all_error_repeats[key] = all_error_repeats.get(key, 0) + count
+        # tool_error_repeats is judge-visibility only — folded into the
+        # signals payload below but deliberately excluded from
+        # has_friction (never gates inclusion) same as it's excluded
+        # from sweep.py's has_friction and character.py's robot signal.
+        for key, count in signals.tool_error_repeats.items():
+            all_tool_error_repeats[key] = all_tool_error_repeats.get(key, 0) + count
         all_models.update(signals.models_used)
 
         has_friction = bool(signals.reprompt_streaks) or bool(signals.error_repeats)
@@ -116,6 +123,11 @@ def build_report_request(
     top_error_repeats = dict(
         sorted(all_error_repeats.items(), key=lambda kv: kv[1], reverse=True)[:20]
     )
+    # Same top-20 capping as error_repeats, same rationale — judge-
+    # visibility only, never fed back into inclusion or character.
+    top_tool_error_repeats = dict(
+        sorted(all_tool_error_repeats.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    )
 
     return ReflectRequest(
         contract_version=CONTRACT_VERSION,
@@ -124,6 +136,7 @@ def build_report_request(
             "reprompt_streaks": top_reprompt_streaks,
             "reprompt_streaks_total": len(all_reprompt_streaks),
             "error_repeats": top_error_repeats,
+            "tool_error_repeats": top_tool_error_repeats,
             "models_used": sorted(all_models),
         },
         chunks=chunks,

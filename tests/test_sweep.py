@@ -56,6 +56,45 @@ def test_gather_skips_calm_and_already_reflected(tmp_path):
     conn.close()
 
 
+def _write_tool_error_only_session(dirpath: Path, name: str) -> Path:
+    """A session whose only friction is a repeated error INSIDE
+    tool_result content (not an assistant turn, not a reprompt streak) —
+    must not be treated as friction (tool_error_repeats never gates
+    inclusion)."""
+    p = dirpath / name
+    tool_result_block = {
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "content": "Error: boom\nTraceback (most recent call last):"}],
+        },
+    }
+    turns = [
+        _user_turn("run the tests"),
+        tool_result_block,
+        tool_result_block,
+        tool_result_block,
+        _assistant_turn("ok", tool_use=True),
+    ]
+    p.write_text("\n".join(json.dumps(t) for t in turns) + "\n", encoding="utf-8")
+    return p
+
+
+def test_gather_tool_error_repeats_alone_does_not_count_as_friction(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    tool_error_only = _write_tool_error_only_session(root, "tool-errors.jsonl")
+    work = gather_pending_work(conn, root=root, window_days=30)
+    assert work == []  # gated out, marked reflected with zero stats instead
+    row = conn.execute(
+        "SELECT streaks, errors FROM sessions WHERE path = ?", (str(tool_error_only),)
+    ).fetchone()
+    assert (row["streaks"], row["errors"]) == (0, 0)
+    conn.close()
+
+
 def test_gather_marks_quiet_session_reflected_with_zero_stats(tmp_path):
     """No-friction sessions are stamped reflected (streaks=0/errors=0/
     duration=0) instead of being left unmarked — otherwise a quiet
@@ -345,6 +384,17 @@ def test_batch_request_includes_retrieved_past_friction(monkeypatch, tmp_path):
         run_sweep(conn, [[w]])
     request = mock_reflect.call_args[0][0]
     assert any("from history" in s for s in request.similar_past_friction)
+    conn.close()
+
+
+def test_batch_request_includes_tool_error_repeats_capped(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    w = _work(tmp_path, "a.jsonl")
+    w.tool_error_repeats = {f"tool err {i}": i for i in range(1, 25)}  # 24 distinct
+    with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
+        run_sweep(conn, [[w]])
+    request = mock_reflect.call_args[0][0]
+    assert len(request.signals["tool_error_repeats"]) == 20
     conn.close()
 
 

@@ -65,6 +65,18 @@ def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool
             result_content = block.get("content")
             if isinstance(result_content, str):
                 text_parts.append(result_content)
+            elif isinstance(result_content, list):
+                # Claude Code also delivers tool_result content as a list
+                # of blocks (mirroring assistant content) rather than a
+                # plain string — a bare `isinstance(..., str)` check
+                # silently dropped this shape entirely (list -> empty
+                # text), which meant tracebacks/errors surfacing this way
+                # were invisible to both chunking and signal extraction.
+                # Concatenate every {"type": "text"} block's text, same
+                # as _extract_text_and_tool_use does for message content.
+                for sub_block in result_content:
+                    if isinstance(sub_block, dict) and sub_block.get("type") == "text":
+                        text_parts.append(sub_block.get("text", ""))
     is_tool_result = has_tool_result and not has_human_text
     return "\n".join(text_parts), tool_use, is_tool_result
 

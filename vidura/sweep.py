@@ -114,6 +114,11 @@ class SessionWork:
     error_keys: list[str] = field(default_factory=list)
     error_count: int = 0
     duration_seconds: float = 0.0
+    # Judge-visibility only (see signals.SessionSignals.tool_error_repeats)
+    # — never feeds streak_count/error_count, which are the columns
+    # mark_reflected stamps into sessions.errors and character.py reads
+    # for the robot threshold.
+    tool_error_repeats: dict[str, int] = field(default_factory=dict)
 
 
 def gather_pending_work(
@@ -176,6 +181,7 @@ def gather_pending_work(
                 error_keys=list(signals.error_repeats.keys()),
                 error_count=sum(signals.error_repeats.values()),
                 duration_seconds=signals.duration_seconds or 0.0,
+                tool_error_repeats=dict(signals.tool_error_repeats),
             )
         )
     return work
@@ -229,11 +235,24 @@ def _batch_request(conn, batch: list[SessionWork]) -> ReflectRequest:
     if terms:
         hits = search_chunks(conn, terms, k=3, exclude_sessions={str(w.path) for w in batch})
         similar_past_friction = [h.text[:1500] for h in hits]
+
+    # tool_error_repeats: judge-visibility only (see SessionWork/
+    # SessionSignals docstrings) — merged across the batch and capped at
+    # the top 20 by count, mirroring report.py's error_repeats capping.
+    batch_tool_error_repeats: dict[str, int] = {}
+    for w in batch:
+        for key, count in w.tool_error_repeats.items():
+            batch_tool_error_repeats[key] = batch_tool_error_repeats.get(key, 0) + count
+    top_tool_error_repeats = dict(
+        sorted(batch_tool_error_repeats.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    )
+
     return ReflectRequest(
         contract_version=CONTRACT_VERSION,
         signals={
             "sessions_in_batch": len(batch),
             "reprompt_streaks_in_batch": sum(w.streak_count for w in batch),
+            "tool_error_repeats": top_tool_error_repeats,
         },
         chunks=chunks,
         fix_index=fix_index_dicts,
