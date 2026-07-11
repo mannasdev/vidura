@@ -146,9 +146,9 @@ def call_claude_cli(
 
 def _strip_markdown_fence(text: str) -> str:
     """Strip a leading/trailing markdown code fence (```json ... ``` or
-    ``` ... ```) if the text is wrapped in one — the single most common
-    local-LLM output quirk. A simple, explicit strip, not a general
-    extractor."""
+    ``` ... ```) if the text is wrapped in one — models sometimes fence
+    JSON output even when asked for raw JSON. A simple, explicit strip,
+    not a general extractor."""
     stripped = text.strip()
     if stripped.startswith("```") and stripped.endswith("```"):
         stripped = stripped[3:-3].strip()
@@ -203,17 +203,9 @@ def parse_suggestions(
     return suggestions[:3]
 
 
-def reflect(
-    request: ReflectRequest,
-    model: str | None = None,
-    timeout_seconds: int | None = None,
-) -> ReflectResponse:
+def reflect(request: ReflectRequest) -> ReflectResponse:
     prompt = build_prompt(request)
-    raw_response = call_claude_cli(
-        prompt,
-        model=model or CLAUDE_CLI_DEFAULT_MODEL,
-        timeout_seconds=timeout_seconds or CLAUDE_CLI_TIMEOUT_SECONDS,
-    )
+    raw_response = call_claude_cli(prompt)
     confidence_floor_by_fix = {
         f["id"]: f["confidence_floor"] for f in request.fix_index
     }

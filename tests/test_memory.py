@@ -41,16 +41,30 @@ def _activate(monkeypatch, url=None):
 # --- memory-less mode (no key) ---
 
 
+def test_memory_functions_take_no_conn_param():
+    """Deletion debris cleanup: chunks live entirely in supermemory now
+    (not SQLite), so remember_chunks/search_chunks/search_sessions/
+    get_context no longer take a conn parameter — this pins the
+    signatures so a future call-site edit that reintroduces it fails
+    loudly."""
+    import inspect
+
+    assert "conn" not in inspect.signature(remember_chunks).parameters
+    assert "conn" not in inspect.signature(search_chunks).parameters
+    assert "conn" not in inspect.signature(search_sessions).parameters
+    assert "conn" not in inspect.signature(get_context).parameters
+
+
 def test_no_key_remember_chunks_no_ops(tmp_path):
     conn = _db(tmp_path)
     # must not raise, must not touch the network layer
-    remember_chunks(conn, "/s/a.jsonl", ["[user] npm error"])
+    remember_chunks("/s/a.jsonl", ["[user] npm error"])
     conn.close()
 
 
 def test_no_key_search_chunks_returns_empty_no_stderr(tmp_path, capsys):
     conn = _db(tmp_path)
-    assert search_chunks(conn, ["npm error"]) == []
+    assert search_chunks(["npm error"]) == []
     captured = capsys.readouterr()
     assert captured.err == ""
     conn.close()
@@ -67,8 +81,8 @@ def test_no_key_never_calls_supermemory_request(monkeypatch, tmp_path):
         raise AssertionError("supermemory must not be called without a key")
 
     monkeypatch.setattr(memory, "_supermemory_request", fail)
-    remember_chunks(conn, "/s/a.jsonl", ["[user] chunk"])
-    assert search_chunks(conn, ["chunk"]) == []
+    remember_chunks("/s/a.jsonl", ["[user] chunk"])
+    assert search_chunks(["chunk"]) == []
     conn.close()
 
 
@@ -89,7 +103,7 @@ def test_remember_chunks_push_payload_shape(monkeypatch, tmp_path):
         raise AssertionError(f"unexpected call {method} {path}")
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    remember_chunks(conn, "/very/private/client-x/session-abc.jsonl", ["[user] first chunk", "[user] second chunk"])
+    remember_chunks("/very/private/client-x/session-abc.jsonl", ["[user] first chunk", "[user] second chunk"])
 
     list_calls = [b for m, p, b in calls if p == "/v3/documents/list"]
     assert len(list_calls) == 1
@@ -119,7 +133,7 @@ def test_remember_chunks_skips_push_when_no_chunks(monkeypatch, tmp_path):
         raise AssertionError("must not call supermemory for an empty chunk list")
 
     monkeypatch.setattr(memory, "_supermemory_request", fail)
-    remember_chunks(conn, "/s/a.jsonl", [])
+    remember_chunks("/s/a.jsonl", [])
     conn.close()
 
 
@@ -142,7 +156,7 @@ def test_remember_chunks_repush_lists_scoped_by_tag_and_basename(monkeypatch, tm
         raise AssertionError(f"unexpected call {method} {path}")
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    remember_chunks(conn, "/s/a.jsonl", ["[user] updated chunk"])
+    remember_chunks("/s/a.jsonl", ["[user] updated chunk"])
 
     list_calls = [b for m, p, b in calls if p == "/v3/documents/list"]
     assert list_calls[0]["containerTags"] == ["vidura"]  # tag conjunct: mandatory bug fix
@@ -166,7 +180,7 @@ def test_remember_chunks_no_delete_when_nothing_existing(monkeypatch, tmp_path):
         raise AssertionError(f"unexpected call {method} {path}")
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    remember_chunks(conn, "/s/a.jsonl", ["[user] chunk"])
+    remember_chunks("/s/a.jsonl", ["[user] chunk"])
     assert not any(p == "/v3/documents/bulk" for _, p, _ in calls)
     conn.close()
 
@@ -199,7 +213,7 @@ def test_search_chunks_parses_hits(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    hits = search_chunks(conn, ["timeout"], k=5)
+    hits = search_chunks(["timeout"], k=5)
     assert len(hits) == 1
     assert hits[0].session_path == "s1.jsonl"
     assert hits[0].text == "[user] timeout seen before"
@@ -229,9 +243,7 @@ def test_search_chunks_exclusion_maps_full_paths_to_basenames(monkeypatch, tmp_p
         )
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    hits = search_chunks(
-        conn, ["timeout"], k=5, exclude_sessions={"/full/path/to/excluded.jsonl"}
-    )
+    hits = search_chunks(["timeout"], k=5, exclude_sessions={"/full/path/to/excluded.jsonl"})
     assert {h.session_path for h in hits} == {"kept.jsonl"}
     conn.close()
 
@@ -259,7 +271,7 @@ def test_search_chunks_age_filter_drops_old_hits(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    hits = search_chunks(conn, ["friction"], k=5)
+    hits = search_chunks(["friction"], k=5)
     assert {h.session_path for h in hits} == {"new.jsonl"}
     conn.close()
 
@@ -280,7 +292,7 @@ def test_search_chunks_missing_created_at_dropped(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    assert search_chunks(conn, ["friction"], k=5) == []
+    assert search_chunks(["friction"], k=5) == []
     conn.close()
 
 
@@ -301,7 +313,7 @@ def test_search_chunks_boundary_exactly_90_days_kept(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    hits = search_chunks(conn, ["window"], k=5)
+    hits = search_chunks(["window"], k=5)
     assert len(hits) == 1
     conn.close()
 
@@ -314,7 +326,7 @@ def test_search_chunks_empty_terms_returns_empty_without_request(monkeypatch, tm
         raise AssertionError("must not call supermemory for empty terms")
 
     monkeypatch.setattr(memory, "_supermemory_request", fail)
-    assert search_chunks(conn, []) == []
+    assert search_chunks([]) == []
     conn.close()
 
 
@@ -329,7 +341,7 @@ def test_breaker_trips_on_request_failure(monkeypatch, tmp_path, capsys):
         raise ConnectionError("supermemory unreachable")
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    assert search_chunks(conn, ["x"]) == []
+    assert search_chunks(["x"]) == []
     assert breaker_tripped() is True
     assert "circuit breaker tripped" in capsys.readouterr().err
     conn.close()
@@ -362,7 +374,7 @@ def test_breaker_trips_on_cumulative_latency(monkeypatch, tmp_path):
     monkeypatch.setattr(memory.time, "monotonic", fake_monotonic)
     monkeypatch.setattr(memory.urllib.request, "urlopen", fake_urlopen)
 
-    search_chunks(conn, ["x"])
+    search_chunks(["x"])
     assert breaker_tripped() is True
     conn.close()
 
@@ -377,10 +389,10 @@ def test_breaker_skip_after_trip_never_calls_request_again(monkeypatch, tmp_path
         raise ConnectionError("down")
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    search_chunks(conn, ["x"])  # trips it
+    search_chunks(["x"])  # trips it
     assert len(calls) == 1
-    search_chunks(conn, ["x"])  # must skip instantly, no second request
-    remember_chunks(conn, "/s/a.jsonl", ["chunk"])
+    search_chunks(["x"])  # must skip instantly, no second request
+    remember_chunks("/s/a.jsonl", ["chunk"])
     assert len(calls) == 1
     conn.close()
 
@@ -393,9 +405,9 @@ def test_breaker_stderr_note_printed_exactly_once(monkeypatch, tmp_path, capsys)
         raise ConnectionError("down")
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    search_chunks(conn, ["x"])
-    search_chunks(conn, ["y"])
-    search_chunks(conn, ["z"])
+    search_chunks(["x"])
+    search_chunks(["y"])
+    search_chunks(["z"])
     err = capsys.readouterr().err
     assert err.count("circuit breaker tripped") == 1
     conn.close()
@@ -409,7 +421,7 @@ def test_breaker_tripped_reflected_in_memory_status(monkeypatch, tmp_path):
         raise ConnectionError("down")
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    search_chunks(conn, ["x"])
+    search_chunks(["x"])
     assert memory_status() == "breaker-tripped"
     conn.close()
 
@@ -440,8 +452,8 @@ def test_remote_gate_never_raises(monkeypatch, tmp_path):
     conn = _db(tmp_path)
     _activate(monkeypatch, url="http://example.com:6767")
     # must not raise — remember_chunks/search_chunks just no-op
-    remember_chunks(conn, "/s/a.jsonl", ["[user] chunk"])
-    assert search_chunks(conn, ["chunk"]) == []
+    remember_chunks("/s/a.jsonl", ["[user] chunk"])
+    assert search_chunks(["chunk"]) == []
     conn.close()
 
 
@@ -470,7 +482,7 @@ def test_search_sessions_orders_by_score_descending(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    sessions = search_sessions(conn, ["relevance"])
+    sessions = search_sessions(["relevance"])
     assert sessions[0][0] == "high.jsonl"
     assert sessions[0][1] > sessions[1][1]
     conn.close()
@@ -478,7 +490,7 @@ def test_search_sessions_orders_by_score_descending(monkeypatch, tmp_path):
 
 def test_search_sessions_empty_when_memory_off(tmp_path):
     conn = _db(tmp_path)
-    assert search_sessions(conn, ["anything"]) == []
+    assert search_sessions(["anything"]) == []
     conn.close()
 
 
@@ -504,14 +516,14 @@ def test_get_context_respects_token_budget(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(memory, "_supermemory_request", fake_request)
-    ctx = get_context(conn, ["timeout"], token_budget=1000)  # ~4000 chars
+    ctx = get_context(["timeout"], token_budget=1000)  # ~4000 chars
     assert 0 < len(ctx) <= 4200
     conn.close()
 
 
 def test_get_context_empty_when_memory_off(tmp_path):
     conn = _db(tmp_path)
-    assert get_context(conn, ["timeout"], token_budget=1000) == ""
+    assert get_context(["timeout"], token_budget=1000) == ""
     conn.close()
 
 

@@ -51,6 +51,20 @@ def test_tool_result_turn_rendered_with_honest_label():
     assert "[user]" not in chunks[0].text
 
 
+def test_empty_tool_result_turn_skipped_before_label_built():
+    """The empty-text guard runs before turn_text/truncation is built
+    (ordering fix) — an empty-text tool_result turn must produce no
+    chunk at all, not a bare "[tool_result]" label."""
+    from vidura.ingest import Turn
+    turns = [
+        Turn(type="user", timestamp=None, text="", tool_use=False, model=None, is_tool_result=True),
+        _turn("real content"),
+    ]
+    chunks = chunk_turns(turns)
+    assert len(chunks) == 1
+    assert chunks[0].text == "[user] real content"
+
+
 def test_long_tool_result_truncated_in_chunk():
     from vidura.chunk import TOOL_RESULT_MAX_CHARS
     from vidura.ingest import Turn

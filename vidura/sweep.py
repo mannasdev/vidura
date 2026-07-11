@@ -224,7 +224,7 @@ def _batch_request(conn, batch: list[SessionWork]) -> ReflectRequest:
     terms = terms[:8]
     similar_past_friction: list[str] = []
     if terms:
-        hits = search_chunks(conn, terms, k=3, exclude_sessions={str(w.path) for w in batch})
+        hits = search_chunks(terms, k=3, exclude_sessions={str(w.path) for w in batch})
         similar_past_friction = [h.text[:1500] for h in hits]
 
     # tool_error_repeats: judge-visibility only (see SessionWork/
@@ -278,7 +278,7 @@ def run_sweep(
                 # these two writes just re-remembers safely. The reverse
                 # order could mark a session reflected whose chunks were
                 # never stored, and resume would then skip it forever.
-                remember_chunks(conn, str(w.path), w.chunks)
+                remember_chunks(str(w.path), w.chunks)
                 mark_reflected(
                     conn,
                     w.path,

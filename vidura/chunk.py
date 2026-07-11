@@ -36,6 +36,8 @@ def chunk_turns(turns: list[Turn]) -> list[Chunk]:
         buffer_turns = 0
 
     for turn in turns:
+        if not turn.text:
+            continue
         # Tool results are user-type records but not human speech — label
         # them honestly so "[user]" in a chunk always means a human prompt
         # (the report's friction-density ranking depends on this), and cap
@@ -48,8 +50,6 @@ def chunk_turns(turns: list[Turn]) -> list[Chunk]:
             turn_text = f"[tool_result] {text}".strip()
         else:
             turn_text = f"[{turn.type}] {turn.text}".strip()
-        if not turn.text:
-            continue
         if buffer_chars + len(turn_text) > CHUNK_TARGET_CHARS and buffer:
             flush()
         buffer.append(turn_text)

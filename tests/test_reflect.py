@@ -71,6 +71,15 @@ def test_parse_suggestions_caps_at_three():
     assert len(suggestions) == 3
 
 
+def test_reflect_takes_only_request_param():
+    """Deletion debris cleanup: all 3 real call sites (cli.py, report.py,
+    sweep.py) pass a bare request — the model/timeout_seconds pass-through
+    params were unused, dropped."""
+    import inspect
+
+    assert list(inspect.signature(reflect).parameters) == ["request"]
+
+
 def test_reflect_returns_suggestions_from_mocked_claude_cli():
     mock_response = json.dumps([
         {"fix_id": "judge-executor-split", "confidence": 0.85, "evidence": ["you re-prompted 3x"], "blunt_summary": "split judge/executor"}

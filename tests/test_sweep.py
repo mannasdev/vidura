@@ -347,7 +347,7 @@ def test_run_sweep_remembers_chunks_on_success(monkeypatch, tmp_path):
     remembered = []
     monkeypatch.setattr(
         "vidura.sweep.remember_chunks",
-        lambda conn, session_path, chunks, *a, **kw: remembered.append((session_path, chunks)),
+        lambda session_path, chunks, *a, **kw: remembered.append((session_path, chunks)),
     )
     batches = [[_work(tmp_path, "a.jsonl")]]
     with patch("vidura.sweep.reflect", return_value=_response()):
@@ -361,7 +361,7 @@ def test_failed_batch_remembers_nothing(monkeypatch, tmp_path):
     remembered = []
     monkeypatch.setattr(
         "vidura.sweep.remember_chunks",
-        lambda conn, session_path, chunks, *a, **kw: remembered.append((session_path, chunks)),
+        lambda session_path, chunks, *a, **kw: remembered.append((session_path, chunks)),
     )
     batches = [[_work(tmp_path, "a.jsonl")]]
     with patch("vidura.sweep.reflect", side_effect=ReflectorError("down")):
@@ -376,7 +376,7 @@ def test_batch_request_includes_retrieved_past_friction(monkeypatch, tmp_path):
     w.error_keys = ["npm error ENEEDAUTH"]
     monkeypatch.setattr(
         "vidura.sweep.search_chunks",
-        lambda conn, terms, k=5, exclude_sessions=None: [
+        lambda terms, k=5, exclude_sessions=None: [
             SimpleNamespace(text="[user] npm error ENEEDAUTH from history")
         ],
     )

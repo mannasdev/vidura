@@ -160,9 +160,16 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
         try:
             conn.executescript(_SCHEMA_V2_FTS)
         except sqlite3.OperationalError:
-            # custom Python build without FTS5 — memory.search falls back
-            # to LIKE; warn once, never crash (silence principle).
-            print("vidura: sqlite lacks FTS5; memory search degrades to LIKE", file=sys.stderr)
+            # custom Python build without FTS5. This whole branch is
+            # legacy-upgrade-path only now: v6 (below) unconditionally
+            # DROPs chunks/chunks_fts on every db, since supermemory
+            # replaced the homegrown FTS5 chunk store as THE memory
+            # backend. A pre-v2 db still walks through v2 on its way to
+            # v6, so this create (and its failure mode) has to stay
+            # here to not break that upgrade path — but nothing reads
+            # chunks_fts by the time open_db returns on any db, old or
+            # new. Warn once, never crash (silence principle).
+            print("vidura: sqlite lacks FTS5; skipping legacy chunks_fts create (dropped by v6 anyway)", file=sys.stderr)
         conn.execute("PRAGMA user_version = 2")
         conn.commit()
         version = 2

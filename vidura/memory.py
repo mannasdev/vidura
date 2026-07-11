@@ -12,7 +12,6 @@ reflector's retrieval step, never exposed via a write-capable API).
 import json
 import os
 import sys
-import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -248,16 +247,14 @@ def _supermemory_search(cfg: tuple[str, str], terms: list[str], k: int, exclude_
 
 
 def remember_chunks(
-    conn: sqlite3.Connection,
     session_path: str,
     chunks: list[str],
     user_turns_per_chunk: list[int] | None = None,
 ) -> None:
     """Push redacted chunk text to supermemory. Silently no-ops when
-    memory is off (no key, remote-gated, or breaker-tripped) — `conn`
-    stays in the signature per the interface contract even though chunks
-    no longer live in SQLite (it's available for future exclusion/state
-    lookups without changing callers)."""
+    memory is off (no key, remote-gated, or breaker-tripped). Chunks
+    live entirely in supermemory now, not SQLite, so there's no `conn`
+    to thread through here."""
     cfg = _supermemory_config()
     if cfg is None or not chunks:
         return
@@ -266,7 +263,6 @@ def remember_chunks(
 
 
 def search_chunks(
-    conn: sqlite3.Connection,
     terms: list[str],
     k: int = 5,
     exclude_sessions: set[str] | None = None,
@@ -284,10 +280,10 @@ def search_chunks(
     return _supermemory_search(cfg, query_terms, k=k, exclude_basenames=exclude_basenames)
 
 
-def search_sessions(conn: sqlite3.Connection, terms: list[str], k: int = 10) -> list[tuple[str, float]]:
+def search_sessions(terms: list[str], k: int = 10) -> list[tuple[str, float]]:
     """Best-scoring session per basename, single scale (supermemory
     similarity, higher-better) — sorted descending."""
-    hits = search_chunks(conn, terms, k=k * 4)
+    hits = search_chunks(terms, k=k * 4)
     best: dict[str, float] = {}
     for h in hits:
         if h.session_path not in best or h.score > best[h.session_path]:
@@ -295,11 +291,11 @@ def search_sessions(conn: sqlite3.Connection, terms: list[str], k: int = 10) -> 
     return sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:k]
 
 
-def get_context(conn: sqlite3.Connection, terms: list[str], token_budget: int) -> str:
+def get_context(terms: list[str], token_budget: int) -> str:
     char_budget = token_budget * 4
     parts: list[str] = []
     used = 0
-    for hit in search_chunks(conn, terms, k=20):
+    for hit in search_chunks(terms, k=20):
         snippet = hit.text[: max(0, char_budget - used)]
         if not snippet:
             break
