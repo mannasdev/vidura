@@ -24,7 +24,7 @@ from vidura.contract import (
     ReflectRequest,
     enforce_payload_budget,
 )
-from vidura.fix_index import load_fix_index
+from vidura.fix_index import fix_index_for_prompt
 from vidura.ingest import parse_session
 from vidura.redact import redact
 from vidura.reflect import CLAUDE_CLI_CWD_TOKEN, ReflectorError, reflect
@@ -101,16 +101,7 @@ def build_report_request(
     all_chunks.sort(key=lambda text: text.count("[user]"))
     chunks = enforce_payload_budget(all_chunks, budget_chars=PAYLOAD_BUDGET_CHARS)
 
-    fix_index_dicts = [
-        {
-            "id": f.id,
-            "title": f.title,
-            "friction_patterns": f.friction_patterns,
-            "remedy": f.remedy,
-            "confidence_floor": f.confidence_floor,
-        }
-        for f in load_fix_index()
-    ]
+    fix_index_dicts = fix_index_for_prompt()
 
     # Bound the signals payload itself: 30 days of logs can produce
     # hundreds of streaks/error keys, which would silently re-evict the

@@ -398,6 +398,33 @@ def test_batch_request_includes_tool_error_repeats_capped(tmp_path):
     conn.close()
 
 
+def test_batch_request_failure_aborts_only_that_batch(tmp_path):
+    """_batch_request itself hits the db (ledger_summary_for_prompt,
+    search_chunks) and can raise on its own — it must live INSIDE the
+    per-batch try (sweep.py), so a failure there aborts only that
+    batch, not the whole sweep. Regression for the boundary bug where
+    it sat outside the try."""
+    conn = open_db(tmp_path / "db.sqlite")
+    batches = [[_work(tmp_path, "a.jsonl")], [_work(tmp_path, "b.jsonl")]]
+    call_count = {"n": 0}
+    real_batch_request = __import__("vidura.sweep", fromlist=["_batch_request"])._batch_request
+
+    def _flaky_batch_request(conn, batch):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("db locked")
+        return real_batch_request(conn, batch)
+
+    with patch("vidura.sweep._batch_request", side_effect=_flaky_batch_request), \
+         patch("vidura.sweep.reflect", return_value=_response()):
+        stats = run_sweep(conn, batches)
+    assert stats["batches_failed"] == 1
+    assert stats["batches_run"] == 1
+    assert needs_reflection(conn, batches[0][0].path) is True   # first batch never marked
+    assert needs_reflection(conn, batches[1][0].path) is False  # second batch still ran
+    conn.close()
+
+
 def test_batch_request_no_error_keys_no_retrieval(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:

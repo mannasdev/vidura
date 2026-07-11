@@ -8,11 +8,22 @@ Design doc Next Steps #3 and Eng Review Findings 1, 2, 4, 7:
   session can't silently overflow the reflector model's context window.
 - timeout: enforced by the caller (Task 8's claude -p call), not here.
 
-PAYLOAD_BUDGET_CHARS is the one operative default, shared by both
-callers (vidura/cli.py and vidura/report.py) so they can't silently
-re-cut an already-budgeted payload to a smaller size. It comfortably
-fits ~48k chars of chunks plus prompt scaffolding within the reflector's
-context window.
+PAYLOAD_BUDGET_CHARS is the one operative default, shared by all three
+callers of enforce_payload_budget: vidura/cli.py (single ad hoc
+reflection), vidura/report.py (single whole-window pass over the last
+N days), and vidura/sweep.py (per-batch, inside the map-reduce sweep) —
+so none of them can silently re-cut an already-budgeted payload to a
+smaller size. It comfortably fits ~48k chars of chunks plus prompt
+scaffolding within the reflector's context window.
+
+sweep.py's pack_batches (not enforce_payload_budget) is the one
+exemption: it packs whole SESSIONS into PAYLOAD_BUDGET_CHARS-sized
+batches up front (never splitting a session across batches, so
+mark_reflected stays atomic per batch — see pack_batches' docstring),
+which is a different job than report.py/cli.py's enforce_payload_budget
+(dropping the oldest CHUNKS from one single, already-assembled list
+that already exceeds budget). Both size against the same constant by
+design — they differ in what they're bin-packing, not by drift.
 DEFAULT_PAYLOAD_BUDGET_CHARS is kept as an alias for callers/tests that
 still reference the old name.
 """

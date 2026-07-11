@@ -19,7 +19,7 @@ from pathlib import Path
 from vidura.character import assign_character
 from vidura.chunk import chunk_turns
 from vidura.contract import CONTRACT_VERSION, PAYLOAD_BUDGET_CHARS, ReflectRequest
-from vidura.fix_index import load_fix_index
+from vidura.fix_index import fix_index_for_prompt
 from vidura.follow_through import evaluate_follow_through
 from vidura.hooks_cli import _support_dir
 from vidura.ingest import parse_session
@@ -210,16 +210,7 @@ def pack_batches(work: list[SessionWork], budget_chars: int = PAYLOAD_BUDGET_CHA
 
 def _batch_request(conn, batch: list[SessionWork]) -> ReflectRequest:
     chunks = [c for w in batch for c in w.chunks]
-    fix_index_dicts = [
-        {
-            "id": f.id,
-            "title": f.title,
-            "friction_patterns": f.friction_patterns,
-            "remedy": f.remedy,
-            "confidence_floor": f.confidence_floor,
-        }
-        for f in load_fix_index()
-    ]
+    fix_index_dicts = fix_index_for_prompt()
     # Retrieval: pull similar past friction for the errors seen in this
     # batch. Capped at 8 terms and k=3 hits, each snippet truncated to
     # 1500 chars — 3x1500 rides inside the 16k-token context headroom
@@ -269,8 +260,13 @@ def run_sweep(
     stats = {"batches_run": 0, "batches_failed": 0, "sessions_reflected": 0, "suggestions_recorded": 0}
     selected = batches if max_batches is None else batches[:max_batches]
     for i, batch in enumerate(selected, start=1):
-        request = _batch_request(conn, batch)
         try:
+            # _batch_request lives INSIDE the try too: it hits the db
+            # (ledger_summary_for_prompt, search_chunks) and can raise on
+            # its own (e.g. a locked db) — contradicted the batch-scoped
+            # degrade comment below when it sat outside. Failing here now
+            # correctly fails just this batch, not the whole sweep.
+            request = _batch_request(conn, batch)
             response = reflect(request)
             for suggestion in response.suggestions:
                 record_suggestion(conn, suggestion)

@@ -1,6 +1,6 @@
 import string
 
-from vidura.fix_index import FixAction, load_fix_index
+from vidura.fix_index import FixAction, fix_index_for_prompt, load_fix_index
 
 
 def test_returns_at_least_five_fixes():
@@ -105,3 +105,32 @@ def test_fix_action_dataclass_shape():
     action = FixAction(tier=1, label="Copy something", payload="text")
     assert action.argv is None
     assert action.target_file is None
+
+
+def test_fix_index_for_prompt_shape_and_no_action_leak():
+    dicts = fix_index_for_prompt()
+    assert len(dicts) == len(load_fix_index())
+    for d in dicts:
+        assert set(d.keys()) == {"id", "title", "friction_patterns", "remedy", "confidence_floor"}
+        assert "action" not in d  # never round-tripped through the model
+
+
+def test_fix_index_for_prompt_used_identically_by_report_and_sweep(monkeypatch):
+    """report.py and sweep.py both build their fix_index payload from
+    the same shared helper — this used to be a verbatim-duplicated
+    comprehension in each module that could silently drift."""
+    from vidura.report import build_report_request
+    from vidura.sweep import _batch_request
+    from vidura.store import open_db
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        conn = open_db(Path(d) / "db.sqlite")
+        report_request = build_report_request([])
+        from vidura.sweep import SessionWork
+
+        batch_request = _batch_request(conn, [SessionWork(path=Path("x"), chunks=[], streak_count=0)])
+        conn.close()
+    assert report_request.fix_index == batch_request.fix_index == fix_index_for_prompt()

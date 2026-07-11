@@ -460,3 +460,23 @@ FIX_INDEX: list[Fix] = [
 
 def load_fix_index() -> list[Fix]:
     return FIX_INDEX
+
+
+def fix_index_for_prompt() -> list[dict]:
+    """The reflector-prompt view of the fix index: just the fields the
+    prompt needs (id/title/friction_patterns/remedy/confidence_floor),
+    never the action payload/argv — actions are dispatched locally by
+    fix_id after a suggestion is accepted (executor.py), never
+    round-tripped through the model. Shared by report.py's single-pass
+    request builder and sweep.py's per-batch one so the transform can't
+    drift between them (it had — verbatim-duplicated comprehensions)."""
+    return [
+        {
+            "id": f.id,
+            "title": f.title,
+            "friction_patterns": f.friction_patterns,
+            "remedy": f.remedy,
+            "confidence_floor": f.confidence_floor,
+        }
+        for f in load_fix_index()
+    ]
