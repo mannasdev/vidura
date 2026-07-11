@@ -157,8 +157,45 @@ def _strip_markdown_fence(text: str) -> str:
     return stripped
 
 
+def _normalize_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
+# Shingle-overlap threshold: a quote counts as verified when at least this
+# fraction of its 5-word windows appear verbatim in one normalized chunk —
+# tolerates light paraphrase/ellipsis without admitting fabrication.
+EVIDENCE_SHINGLE_SIZE = 5
+EVIDENCE_SHINGLE_THRESHOLD = 0.7
+
+
+def _evidence_verified(evidence: str, normalized_chunks: list[str]) -> bool:
+    """A quote is verified if it appears (whitespace-normalized) in some
+    chunk, or if enough of its 5-word shingles do — all within a single
+    chunk, so fragments from different sessions can't be stitched together."""
+    quote = _normalize_whitespace(evidence)
+    if not quote:
+        return False
+    words = quote.split()
+    if len(words) < EVIDENCE_SHINGLE_SIZE:
+        shingles = [quote]
+    else:
+        shingles = [
+            " ".join(words[i : i + EVIDENCE_SHINGLE_SIZE])
+            for i in range(len(words) - EVIDENCE_SHINGLE_SIZE + 1)
+        ]
+    for chunk in normalized_chunks:
+        if quote in chunk:
+            return True
+        hits = sum(1 for shingle in shingles if shingle in chunk)
+        if hits / len(shingles) >= EVIDENCE_SHINGLE_THRESHOLD:
+            return True
+    return False
+
+
 def parse_suggestions(
-    raw_response: str, confidence_floor_by_fix: dict[str, float]
+    raw_response: str,
+    confidence_floor_by_fix: dict[str, float],
+    chunks: list[str] | None = None,
 ) -> list[Suggestion]:
     try:
         parsed: Any = json.loads(_strip_markdown_fence(raw_response))
@@ -171,6 +208,10 @@ def parse_suggestions(
     if not isinstance(parsed, list):
         raise ReflectorError("reflector output had no suggestions array")
 
+    normalized_chunks = (
+        [_normalize_whitespace(c) for c in chunks] if chunks is not None else None
+    )
+
     suggestions: list[Suggestion] = []
     for item in parsed:
         if not isinstance(item, dict):
@@ -180,22 +221,37 @@ def parse_suggestions(
             confidence = float(item.get("confidence", 0.0))
         except (TypeError, ValueError):
             continue
-        floor = confidence_floor_by_fix.get(fix_id, 0.7) if fix_id else 0.8
+        # A fix_id absent from the fix index is a hallucination: it must not
+        # enter the ledger as a known fix (vidura-do can't resolve it), so it
+        # is demoted to novel — the model's id string is kept for context.
+        known = isinstance(fix_id, str) and fix_id in confidence_floor_by_fix
+        floor = confidence_floor_by_fix[fix_id] if known else 0.8
         if confidence < floor:
             continue
         evidence = item.get("evidence", [])
         if not isinstance(evidence, list):
             evidence = []
+        if normalized_chunks is not None:
+            # Fabricated quotes are fatal to a tool whose brand is "bluntly,
+            # with evidence": unverifiable strings are dropped, and a
+            # suggestion whose entire evidence fails is dropped whole.
+            evidence = [
+                e
+                for e in evidence
+                if isinstance(e, str) and _evidence_verified(e, normalized_chunks)
+            ]
+            if not evidence:
+                continue
         blunt_summary = item.get("blunt_summary", "")
         if not isinstance(blunt_summary, str):
             blunt_summary = str(blunt_summary)
         suggestions.append(
             Suggestion(
-                fix_id=fix_id or "novel",
+                fix_id=fix_id if known or fix_id else "novel",
                 confidence=confidence,
                 evidence=evidence,
                 blunt_summary=blunt_summary,
-                novel=fix_id is None,
+                novel=not known,
             )
         )
     # Contract caps suggestions at 3 (SYSTEM_PROMPT/CLOSING_INSTRUCTION ask
@@ -209,5 +265,9 @@ def reflect(request: ReflectRequest) -> ReflectResponse:
     confidence_floor_by_fix = {
         f["id"]: f["confidence_floor"] for f in request.fix_index
     }
-    suggestions = parse_suggestions(raw_response, confidence_floor_by_fix)
+    # The live path always verifies evidence against the chunks the
+    # reflector actually saw.
+    suggestions = parse_suggestions(
+        raw_response, confidence_floor_by_fix, chunks=request.chunks
+    )
     return ReflectResponse(contract_version=CONTRACT_VERSION, suggestions=suggestions)

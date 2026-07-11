@@ -43,28 +43,38 @@ class Turn:
     # per-turn list, not yet aggregated; extraction happens once here so
     # both signals.py and any future direct consumer read the same shape.
     tool_names: list[str] = field(default_factory=list)
+    # Claude Code sets "is_error": true on failed tool_result blocks. The
+    # flag catches failures whose text carries no recognizable error marker
+    # (e.g. a build tool that prints a summary and exits nonzero).
+    is_error: bool = False
 
 
-def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool, list[str]]:
+def _extract_text_and_tool_use(
+    message: dict[str, Any],
+) -> tuple[str, bool, bool, bool, list[str]]:
     content = message.get("content")
     if isinstance(content, str):
-        return content, False, False, []
+        return content, False, False, False, []
     if not isinstance(content, list):
-        return "", False, False, []
+        return "", False, False, False, []
 
     text_parts: list[str] = []
     tool_use = False
     has_tool_result = False
     has_human_text = False
+    is_error = False
     tool_names: list[str] = []
     for block in content:
         if not isinstance(block, dict):
             continue
         block_type = block.get("type")
         if block_type == "text":
-            if block.get("text", "").strip():
+            # `or ""`: a literal `"text": null` in the JSON must not crash
+            # ingest — malformed lines degrade, never blind the whole session.
+            block_text = block.get("text") or ""
+            if block_text.strip():
                 has_human_text = True
-            text_parts.append(block.get("text", ""))
+            text_parts.append(block_text)
         elif block_type == "tool_use":
             tool_use = True
             name = block.get("name")
@@ -72,23 +82,27 @@ def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool
                 tool_names.append(name)
         elif block_type == "tool_result":
             has_tool_result = True
+            if block.get("is_error"):
+                is_error = True
             result_content = block.get("content")
             if isinstance(result_content, str):
                 text_parts.append(result_content)
             elif isinstance(result_content, list):
-                # Claude Code also delivers tool_result content as a list
-                # of blocks (mirroring assistant content) rather than a
-                # plain string — a bare `isinstance(..., str)` check
-                # silently dropped this shape entirely (list -> empty
-                # text), which meant tracebacks/errors surfacing this way
-                # were invisible to both chunking and signal extraction.
-                # Concatenate every {"type": "text"} block's text, same
-                # as _extract_text_and_tool_use does for message content.
-                for sub_block in result_content:
-                    if isinstance(sub_block, dict) and sub_block.get("type") == "text":
-                        text_parts.append(sub_block.get("text", ""))
+                # ~13% of real tool_result blocks carry content as a list of
+                # blocks (mirroring assistant content) rather than a plain
+                # string; only "text" blocks hold readable output — images
+                # and malformed entries are skipped. Dropping this shape
+                # made tracebacks surfacing this way invisible to both
+                # chunking and signal extraction.
+                inner = [
+                    item.get("text") or ""
+                    for item in result_content
+                    if isinstance(item, dict) and item.get("type") == "text"
+                ]
+                if inner:
+                    text_parts.append("\n".join(inner))
     is_tool_result = has_tool_result and not has_human_text
-    return "\n".join(text_parts), tool_use, is_tool_result, tool_names
+    return "\n".join(text_parts), tool_use, is_tool_result, is_error, tool_names
 
 
 def parse_session(path: Path) -> Iterator[Turn]:
@@ -111,7 +125,7 @@ def parse_session(path: Path) -> Iterator[Turn]:
             if not isinstance(message, dict):
                 continue
 
-            text, tool_use, is_tool_result, tool_names = _extract_text_and_tool_use(message)
+            text, tool_use, is_tool_result, is_error, tool_names = _extract_text_and_tool_use(message)
             yield Turn(
                 type=record_type,
                 timestamp=record.get("timestamp"),
@@ -120,4 +134,5 @@ def parse_session(path: Path) -> Iterator[Turn]:
                 model=message.get("model"),
                 is_tool_result=is_tool_result,
                 tool_names=tool_names,
+                is_error=is_error,
             )
