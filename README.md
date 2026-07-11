@@ -36,10 +36,12 @@ No menubar app yet — that's M3 (see Roadmap).
 - **M3** — the menu-bar companion: a small pet that sleeps until it has
   earned counsel, and can *act* on an accepted suggestion (install the
   skill, apply the workflow) with explicit per-action confirmation.
-- **M4+** — a read-only MCP memory API over the same database, so your
-  other agents can start sessions with cross-session context
-  (`search_sessions`, `get_context`). Read-only is a hard rule: agents
-  consume memory, only Vidura writes it.
+- **M4+** — read-only cross-agent memory: delivered via supermemory's own
+  MCP server over the `vidura` containerTag, not a Vidura-built one.
+  Vidura is the sole writer (`remember_chunks`); other agents connect
+  their own MCP client to supermemory and read the same container for
+  cross-session context. Read-only for everyone but Vidura is a hard
+  rule, enforced by supermemory's server, not ours to build.
 
 ## Setup
 
@@ -75,19 +77,48 @@ vidura-ledger accept 3    # mark suggestion 3 accepted
 vidura-ledger dismiss 3   # dismissed suggestions are NEVER re-suggested
 ```
 
-Swept sessions also feed a persistent chunk memory (SQLite FTS5): each
-new reflection retrieves "similar past friction" from your history and
-shows it to the reflector, so recurring patterns get recognized across
-weeks, not just within one report. And accepted suggestions are tracked
-for follow-through — if the targeted friction actually drops, the ledger
-upgrades them to `adopted`; if two weeks pass unchanged, `lapsed`.
+Swept sessions also feed a persistent chunk memory: each new reflection
+retrieves "similar past friction" from your history and shows it to the
+reflector (as background context, never quotable evidence), so recurring
+patterns get recognized across weeks, not just within one report. And
+accepted suggestions are tracked for follow-through — if the targeted
+friction actually drops, the ledger upgrades them to `adopted`; if two
+weeks pass unchanged, `lapsed`.
 
-Set `VIDURA_MEMORY_BACKEND=blend` (plus `SUPERMEMORY_CC_API_KEY`, and
-optionally `VIDURA_SUPERMEMORY_URL`, default `http://localhost:6767`) to
-blend in semantic retrieval from a local [supermemory](https://supermemory.ai)
-instance alongside FTS5. Optional and additive — unset, everything behaves
-exactly as before. Falls back to FTS5-only silently if supermemory is
-unreachable.
+### Memory (optional, powered by supermemory)
+
+Chunk memory runs on [supermemory](https://supermemory.ai) — no memory,
+or supermemory; there's no local fallback index to reconcile. Without a
+key, Vidura runs exactly like M0: `similar_past_friction` is simply
+absent, everything else works unchanged.
+
+Two-command quickstart, a local supermemory instance:
+
+```bash
+npx supermemory local     # pin a version once you've checked their docs, e.g. npx supermemory@<version> local
+```
+
+Then set:
+
+```bash
+export SUPERMEMORY_CC_API_KEY=sm_...
+# optional, defaults to http://localhost:6767
+export VIDURA_SUPERMEMORY_URL=http://localhost:6767
+```
+
+**Privacy.** Keep `VIDURA_SUPERMEMORY_URL` on localhost — a non-local URL
+is hard-gated off (`VIDURA_SUPERMEMORY_ALLOW_REMOTE=1` is required to
+opt in, and even then only one stderr line marks the change). Chunk text
+passes the redaction gate before it ever leaves the process, same as
+everything the reflector sees. Only a basename (never the full session
+path) is stored in supermemory's metadata, scoped under the `vidura`
+containerTag.
+
+**Degrade guarantee.** Any supermemory outage, timeout, or the circuit
+breaker tripping (first failure, or >30s cumulative wall-time in a
+process) disables memory for the rest of that run with at most one
+stderr note — the core loop (signals → judge → ledger → pet) never
+depends on it.
 
 ## Acting on suggestions
 
