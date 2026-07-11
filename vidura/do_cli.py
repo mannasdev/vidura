@@ -97,8 +97,14 @@ def main(argv: list[str] | None = None) -> int:
 
         from vidura.store import executions_for
 
-        audit_id = executions_for(conn, row["id"])[-1]["id"]
+        last_audit = executions_for(conn, row["id"])[-1]
+        audit_id = last_audit["id"]
         print(f"vidura-do: {status} (audit id {audit_id})")
+        if status == "done" and "verify-failed" in (last_audit["detail"] or ""):
+            print(
+                "vidura-do: installed but verification failed — check manually",
+                file=sys.stderr,
+            )
         return 0 if status == "done" else 3
     finally:
         conn.close()

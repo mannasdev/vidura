@@ -240,6 +240,8 @@ FIX_INDEX: list[Fix] = [
             # under this fix-index entry without a Vidura release —
             # verified against npm's "latest" dist-tag 2026-07-11.
             argv=["claude", "mcp", "add", "playwright", "--", "npx", "-y", "@playwright/mcp@0.0.78"],
+            verify_argv=["claude", "mcp", "list"],
+            verify_expect="playwright",
         ),
     ),
     Fix(

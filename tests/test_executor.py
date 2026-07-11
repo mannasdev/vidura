@@ -687,3 +687,155 @@ def test_copy_bypasses_cwd_guard(tmp_path, monkeypatch):
         mock_run.return_value.returncode = 0
         status = execute_action(conn, row, fix, confirm=_always_no)
     assert status == "done"
+
+
+# ---------------------------------------------------------------------------
+# post-install verification (verify_argv / verify_expect)
+# ---------------------------------------------------------------------------
+
+
+def _verify_fix(verify_argv=None, verify_expect=None):
+    return Fix(
+        id="manual-ui-verification",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(
+            tier=3,
+            label="Install the Playwright MCP",
+            payload="",
+            argv=["claude", "mcp", "add", "playwright", "--", "npx", "-y", "@playwright/mcp@0.0.78"],
+            verify_argv=verify_argv,
+            verify_expect=verify_expect,
+        ),
+    )
+
+
+def test_verify_success_path_records_verified(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "manual-ui-verification")
+    fix = _verify_fix(verify_argv=["claude", "mcp", "list"], verify_expect="playwright")
+
+    install_result = type("R", (), {"returncode": 0, "stdout": "installed\n", "stderr": ""})()
+    verify_result = type("R", (), {"returncode": 0, "stdout": "playwright: connected\n", "stderr": ""})()
+
+    with patch("vidura.executor.subprocess.run", side_effect=[install_result, verify_result]) as mock_run:
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "done"
+    assert mock_run.call_count == 2
+    verify_call_args = mock_run.call_args_list[1]
+    assert verify_call_args.args[0] == ["claude", "mcp", "list"]
+    assert verify_call_args.kwargs["timeout"] == 30
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+    assert "verified" in rows[0]["detail"]
+    assert "verify-failed" not in rows[0]["detail"]
+
+
+def test_verify_failed_path_status_still_done_message_shown(tmp_path, monkeypatch):
+    """A verify that runs but doesn't show the expected substring never
+    raises and never flips the RUN's own status — 'done' stays 'done',
+    only the audit detail records the verify outcome."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "manual-ui-verification")
+    fix = _verify_fix(verify_argv=["claude", "mcp", "list"], verify_expect="playwright")
+
+    install_result = type("R", (), {"returncode": 0, "stdout": "installed\n", "stderr": ""})()
+    verify_result = type("R", (), {"returncode": 0, "stdout": "no mcp servers configured\n", "stderr": ""})()
+
+    with patch("vidura.executor.subprocess.run", side_effect=[install_result, verify_result]):
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "done"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+    assert "verify-failed" in rows[0]["detail"]
+
+
+def test_verify_subprocess_raising_is_audited_not_crashing(tmp_path, monkeypatch):
+    """A verify command that itself raises (missing binary, timeout)
+    must not propagate — it degrades to an audited verify-failed note,
+    same as a verify that ran but showed the wrong output."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "manual-ui-verification")
+    fix = _verify_fix(verify_argv=["claude", "mcp", "list"], verify_expect="playwright")
+
+    install_result = type("R", (), {"returncode": 0, "stdout": "installed\n", "stderr": ""})()
+
+    with patch(
+        "vidura.executor.subprocess.run",
+        side_effect=[install_result, FileNotFoundError("no such file: claude")],
+    ):
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "done"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+    assert "verify-failed" in rows[0]["detail"]
+
+
+def test_dry_run_never_runs_verify(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "manual-ui-verification")
+    fix = _verify_fix(verify_argv=["claude", "mcp", "list"], verify_expect="playwright")
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        status = execute_action(conn, row, fix, confirm=_always_yes, dry_run=True)
+        mock_run.assert_not_called()
+    assert status == "dry-run"
+    assert executions_for(conn, row["id"]) == []
+
+
+def test_verify_not_run_when_install_fails(tmp_path, monkeypatch):
+    """Verify only runs after a successful (returncode 0) RUN — a
+    failed install already tells its own story."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "manual-ui-verification")
+    fix = _verify_fix(verify_argv=["claude", "mcp", "list"], verify_expect="playwright")
+
+    install_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "boom\n"})()
+
+    with patch("vidura.executor.subprocess.run", side_effect=[install_result]) as mock_run:
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "failed"
+    assert mock_run.call_count == 1  # verify never ran
+    rows = executions_for(conn, row["id"])
+    assert rows[0]["status"] == "failed"
+
+
+def test_verify_none_skips_verification_entirely(tmp_path, monkeypatch):
+    """A RUN action with verify_argv=None (e.g. the skillfish skill
+    installs) never attempts verification — audit detail is unchanged
+    from pre-verify behavior."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "github-context-by-paste")
+    fix = Fix(
+        id="github-context-by-paste",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(tier=3, label="Install gh", payload="", argv=["brew", "install", "gh"]),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "Installing gh...\n"
+        mock_run.return_value.stderr = ""
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert mock_run.call_count == 1
+    rows = executions_for(conn, row["id"])
+    assert "verified" not in rows[0]["detail"]
+    assert "verify-failed" not in rows[0]["detail"]

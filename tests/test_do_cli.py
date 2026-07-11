@@ -179,6 +179,45 @@ def test_run_timeout_exits_three_with_audit_no_traceback(tmp_path, monkeypatch, 
     assert audits[0]["status"] == "timeout"
 
 
+def test_verify_failed_shows_check_manually_message_but_still_exits_zero(tmp_path, monkeypatch, capsys):
+    """A verify failure never flips vidura-do's exit code — the install
+    itself succeeded — but do_cli surfaces a manual-check message on
+    stderr so the user notices."""
+    from vidura.contract import Suggestion
+    from vidura.fix_index import load_fix_index
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    db = tmp_path / "db.sqlite"
+    monkeypatch.setenv("VIDURA_DB_PATH", str(db))
+    conn = open_db(db)
+    record_suggestion(
+        conn,
+        Suggestion(
+            fix_id="manual-ui-verification", confidence=0.8, evidence=["q"], blunt_summary="summary"
+        ),
+    )
+    row_id = ledger_entries(conn)[0]["id"]
+    set_status(conn, row_id, "accepted")
+    conn.close()
+
+    fix = next(f for f in load_fix_index() if f.id == "manual-ui-verification")
+    assert fix.action.verify_argv is not None  # sanity: this fix has a real verify
+
+    install_result = type("R", (), {"returncode": 0, "stdout": "installed\n", "stderr": ""})()
+    verify_result = type("R", (), {"returncode": 0, "stdout": "no mcp servers\n", "stderr": ""})()
+
+    with patch("vidura.do_cli._tty_confirm", return_value=True):
+        with patch(
+            "vidura.executor.subprocess.run", side_effect=[install_result, verify_result]
+        ):
+            rc = main([str(row_id)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "verification failed" in err.lower()
+    assert "check manually" in err.lower()
+
+
 def test_write_cwd_guard_exits_one_no_traceback(tmp_path, monkeypatch, capsys):
     """A tmp dir with no .git and not $HOME/root refuses WRITE with a
     clear message and exit 1, not a raw traceback."""

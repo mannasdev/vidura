@@ -24,6 +24,7 @@ from vidura.store import record_execution
 
 OUTPUT_HEAD_CHARS = 2000
 RUN_TIMEOUT_SECONDS = 300
+VERIFY_TIMEOUT_SECONDS = 30
 
 
 class ExecutionDeclined(Exception):
@@ -265,15 +266,62 @@ def _execute_run(conn, suggestion_id: int, fix: Fix, *, confirm, dry_run: bool) 
             else (result.stderr or "")
         )
         output_head = (stdout + stderr)[:OUTPUT_HEAD_CHARS]
+        detail = f"ran: {' '.join(argv)}"
+        # Post-install verification (design doc: "Do proves the action
+        # worked") only runs after a successful RUN — a nonzero/failed
+        # exit already tells its own story, verifying on top of a known
+        # failure would just be noise. A verify failure degrades to
+        # honesty, not to error: the install may still be fine (e.g. the
+        # verify command's own output format shifted), so it must never
+        # flip a 'done' RUN into 'failed' or raise — it only annotates
+        # the SAME audit row's detail, which is the one place both do_cli
+        # and a human reading the audit log look.
+        if status == "done" and action.verify_argv:
+            verify_note = _run_verify(action.verify_argv, action.verify_expect)
+            detail = f"{detail} ({verify_note})"
     finally:
         record_execution(
             conn,
             suggestion_id=suggestion_id,
             fix_id=fix.id,
             tier=action.tier,
-            detail=f"ran: {' '.join(argv)}",
+            detail=detail,
             status=status,
             exit_code=result.returncode,
             output_head=output_head,
         )
     return status
+
+
+def _run_verify(verify_argv: list[str], verify_expect: str | None) -> str:
+    """Run a post-install verification command and return a short note
+    for the audit detail ("verified" / "verify-failed: <head>"). Never
+    raises: a verify subprocess that times out, can't be found, or
+    otherwise blows up is caught and reported the same way as a verify
+    that ran but didn't show the expected substring — verification
+    failing is informational, never fatal (the RUN itself already
+    succeeded and is already recorded as 'done')."""
+    try:
+        result = subprocess.run(
+            verify_argv, shell=False, timeout=VERIFY_TIMEOUT_SECONDS, capture_output=True
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        return f"verify-failed: {exc}"[:OUTPUT_HEAD_CHARS]
+
+    stdout = (
+        result.stdout.decode(errors="replace")
+        if isinstance(result.stdout, bytes)
+        else (result.stdout or "")
+    )
+    stderr = (
+        result.stderr.decode(errors="replace")
+        if isinstance(result.stderr, bytes)
+        else (result.stderr or "")
+    )
+    output = stdout + stderr
+
+    if result.returncode != 0:
+        return f"verify-failed: {output[:OUTPUT_HEAD_CHARS]}"
+    if verify_expect is not None and verify_expect not in output:
+        return f"verify-failed: {output[:OUTPUT_HEAD_CHARS]}"
+    return "verified"
