@@ -60,7 +60,13 @@ def _guard_cwd() -> None:
     finding #5). Refuse when cwd is exactly the filesystem root or the
     user's home directory, or when it's not inside a git repo at all
     (cheap check: a .git in cwd or any of its parents) — COPY (tier 1)
-    is unaffected, it never touches the filesystem."""
+    is unaffected, it never touches the filesystem.
+
+    Callers gate this: WRITE always calls it (it resolves target_file
+    against cwd, so a repo-less invocation is never safe). RUN only
+    calls it when action.requires_repo is True — a machine-global
+    install (e.g. skillfish, writing to ~/.claude/skills regardless of
+    cwd) has no reason to refuse just because cwd isn't a repo."""
     cwd = Path.cwd().resolve()
     if cwd == Path(cwd.anchor) or cwd == Path.home().resolve():
         raise CwdGuardError(
@@ -104,8 +110,14 @@ def execute_action(
             "vidura: execution disabled (VIDURA_EXECUTION=off) — "
             "tiers 2+ (WRITE/RUN) are blocked; unset VIDURA_EXECUTION to re-enable"
         )
-    if action.tier >= 2 and not dry_run:
-        _guard_cwd()
+    # WRITE (tier 2) is always guarded — it resolves target_file against
+    # cwd, so a repo-less invocation is never safe regardless of the
+    # action's requires_repo flag. RUN (tier 3) only guards when the
+    # action itself is repo-scoped (requires_repo=True, the default) —
+    # a machine-global install has nothing to protect by refusing.
+    if not dry_run:
+        if action.tier == 2 or (action.tier == 3 and action.requires_repo):
+            _guard_cwd()
 
     if action.tier == 1:
         return _execute_copy(conn, suggestion_id, fix, dry_run=dry_run)

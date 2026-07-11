@@ -22,6 +22,17 @@ class FixAction:
                       repo-root-relative destination (e.g. "CLAUDE.md").
       tier 3 (RUN):   argv is the exact argv list (never a shell string);
                       payload unused.
+
+    requires_repo (executor.py's cwd guard): True (the safe default)
+    means WRITE/RUN refuses to run unless cwd is inside a git repo (and
+    not $HOME/filesystem root). WRITE is ALWAYS guarded regardless of
+    this flag — it resolves target_file against cwd, so a stray repo-less
+    invocation is always unsafe. RUN honors this flag: a project-scoped
+    install (e.g. `claude mcp add` without -s, which writes to the repo's
+    local MCP config) needs requires_repo=True; a machine-global install
+    (e.g. skillfish, which writes to ~/.claude/skills regardless of cwd)
+    can safely run with requires_repo=False. COPY is never guarded either
+    way — it never touches the filesystem or cwd.
     """
 
     tier: int
@@ -29,6 +40,9 @@ class FixAction:
     payload: str
     argv: list[str] | None = None
     target_file: str | None = None
+    requires_repo: bool = True
+    verify_argv: list[str] | None = None
+    verify_expect: str | None = None
 
 
 @dataclass
@@ -281,6 +295,13 @@ FIX_INDEX: list[Fix] = [
             # Pinned, not bare "skillfish" (implicit @latest) — see the
             # Playwright MCP fix's argv comment above for the rationale.
             argv=["npx", "-y", "skillfish@1.0.38", "add", "obra/superpowers", "test-driven-development"],
+            # skillfish installs to ~/.claude/skills — machine-global,
+            # not repo-scoped. No verify_argv: confirming a skill landed
+            # would mean shelling out to `ls ~/.claude/skills/...`, which
+            # is itself a shell-dependent check this executor deliberately
+            # avoids (argv is always a literal, non-shell command list) —
+            # left None rather than faked.
+            requires_repo=False,
         ),
     ),
     Fix(
@@ -302,6 +323,10 @@ FIX_INDEX: list[Fix] = [
             label="Install the systematic-debugging skill",
             payload="",
             argv=["npx", "-y", "skillfish@1.0.38", "add", "obra/superpowers", "systematic-debugging"],
+            # skillfish installs to ~/.claude/skills — machine-global.
+            # No verify_argv: see the test-driven-development skill's
+            # action comment above for why.
+            requires_repo=False,
         ),
     ),
     Fix(

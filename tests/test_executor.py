@@ -586,6 +586,89 @@ def test_dry_run_bypasses_cwd_guard(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "CLAUDE.md").exists()
 
 
+def test_run_requires_repo_false_executes_from_non_git_cwd(tmp_path, monkeypatch):
+    """A machine-global install (requires_repo=False, e.g. skillfish)
+    must not be blocked by the cwd guard — it writes to ~/.claude/skills
+    regardless of cwd, so refusing outside a repo protects nothing."""
+    monkeypatch.chdir(tmp_path)  # deliberately no .git anywhere
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "shotgun-debugging")
+    fix = Fix(
+        id="shotgun-debugging",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(
+            tier=3,
+            label="Install skill",
+            payload="",
+            argv=["npx", "-y", "skillfish@1.0.38", "add", "obra/superpowers", "systematic-debugging"],
+            requires_repo=False,
+        ),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "installed\n"
+        mock_run.return_value.stderr = ""
+        status = execute_action(conn, row, fix, confirm=_always_yes)
+    assert status == "done"
+    mock_run.assert_called_once()
+
+
+def test_run_requires_repo_true_still_refuses_outside_git_repo(tmp_path, monkeypatch):
+    """The default (requires_repo=True) preserves the existing guard for
+    project-scoped installs like `claude mcp add` (without -s)."""
+    monkeypatch.chdir(tmp_path)  # no .git anywhere
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "manual-ui-verification")
+    fix = Fix(
+        id="manual-ui-verification",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(
+            tier=3,
+            label="Install the Playwright MCP",
+            payload="",
+            argv=["claude", "mcp", "add", "playwright", "--", "npx", "-y", "@playwright/mcp@0.0.78"],
+        ),
+    )
+    with patch("vidura.executor.subprocess.run") as mock_run:
+        with pytest.raises(CwdGuardError):
+            execute_action(conn, row, fix, confirm=_always_yes)
+        mock_run.assert_not_called()
+    assert executions_for(conn, row["id"]) == []
+
+
+def test_write_always_refuses_outside_git_repo_regardless_of_requires_repo(tmp_path, monkeypatch):
+    """WRITE has no requires_repo escape hatch — even if a caller sets
+    requires_repo=False on a tier-2 action, WRITE still refuses outside
+    a repo because it resolves target_file against cwd."""
+    monkeypatch.chdir(tmp_path)  # no .git anywhere
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "missing-claude-md")
+    fix = Fix(
+        id="missing-claude-md",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(
+            tier=2,
+            label="Write CLAUDE.md",
+            payload="# Project\n",
+            target_file="CLAUDE.md",
+            requires_repo=False,
+        ),
+    )
+    with pytest.raises(CwdGuardError):
+        execute_action(conn, row, fix, confirm=_always_yes)
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert executions_for(conn, row["id"]) == []
+
+
 def test_copy_bypasses_cwd_guard(tmp_path, monkeypatch):
     """COPY (tier 1) never touches the filesystem or runs a command
     from cwd — it's unaffected by the guard even outside a git repo."""
