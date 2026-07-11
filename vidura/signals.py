@@ -31,10 +31,21 @@ class SessionSignals:
     # drives inclusion/character would re-import exactly the kind of
     # noise is_tool_result was introduced to keep out of the streak count.
     tool_error_repeats: dict[str, int] = None  # type: ignore[assignment]
+    # Per-session tool-usage counts: tool name (e.g. "Read", or an
+    # MCP-style "mcp__playwright__click") -> number of tool_use calls in
+    # this session. Cheap, deterministic — the substrate follow_through.py
+    # reads to tell whether an installed tool is actually getting used
+    # (adoption_tool matching is a case-insensitive substring match
+    # against these keys, so "playwright" matches
+    # "mcp__playwright__click"). Never gates inclusion or feeds
+    # character.py, same posture as tool_error_repeats.
+    tools_used: dict[str, int] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.tool_error_repeats is None:
             self.tool_error_repeats = {}
+        if self.tools_used is None:
+            self.tools_used = {}
 
 
 def _parse_ts(ts: str | None) -> datetime | None:
@@ -56,6 +67,7 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
     current_streak = 0
     error_counts: dict[str, int] = {}
     tool_error_counts: dict[str, int] = {}
+    tool_use_counts: dict[str, int] = {}
     models: set[str] = set()
     timestamps: list[datetime] = []
 
@@ -92,6 +104,8 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
                 if marker in turn.text:
                     key = _error_key(turn.text, marker)
                     error_counts[key] = error_counts.get(key, 0) + 1
+            for name in turn.tool_names:
+                tool_use_counts[name] = tool_use_counts.get(name, 0) + 1
 
     if current_streak >= 2:
         reprompt_streaks.append(current_streak)
@@ -110,4 +124,5 @@ def extract_signals(turns: list[Turn]) -> SessionSignals:
         models_used=sorted(models),
         turn_count=len(turns),
         tool_error_repeats=repeated_tool_errors,
+        tools_used=tool_use_counts,
     )

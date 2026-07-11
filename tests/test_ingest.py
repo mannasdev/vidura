@@ -177,6 +177,47 @@ def test_tool_result_list_shaped_multiple_text_blocks_concatenated(tmp_path):
     assert "second part" in turns[0].text
 
 
+def test_assistant_tool_use_extracts_tool_names(tmp_path):
+    line = json.dumps({
+        "type": "assistant",
+        "timestamp": "2026-07-01T10:00:05.000Z",
+        "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [
+                {"type": "text", "text": "checking a file, then running a tool"},
+                {"type": "tool_use", "name": "Read", "input": {"file_path": "x.py"}},
+                {"type": "tool_use", "name": "mcp__playwright__click", "input": {}},
+            ],
+        },
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].tool_names == ["Read", "mcp__playwright__click"]
+
+
+def test_no_tool_use_yields_empty_tool_names(tmp_path):
+    line = json.dumps({
+        "type": "assistant",
+        "timestamp": "2026-07-01T10:00:05.000Z",
+        "message": {"role": "assistant", "model": "m", "content": [{"type": "text", "text": "just talk"}]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].tool_names == []
+
+
+def test_user_turn_has_empty_tool_names(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": "plain string content"},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].tool_names == []
+
+
 def test_tool_result_list_shaped_ignores_non_text_blocks(tmp_path):
     line = json.dumps({
         "type": "user",

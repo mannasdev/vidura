@@ -119,6 +119,13 @@ class SessionWork:
     # mark_reflected stamps into sessions.errors and character.py reads
     # for the robot threshold.
     tool_error_repeats: dict[str, int] = field(default_factory=dict)
+    # Gather-time capture of signals.SessionSignals.tools_used, carried
+    # through to mark_reflected the same way streaks/errors/duration_seconds
+    # are — persisted for follow_through.py's tool-usage adoption check,
+    # NOT surfaced in the reflector payload (detection is the judge
+    # reading chunks directly; this column is the deterministic
+    # follow-through substrate only).
+    tools_used: dict[str, int] = field(default_factory=dict)
 
 
 def gather_pending_work(
@@ -158,7 +165,16 @@ def gather_pending_work(
             # character.py's n_sessions/sessions_per_day denominators
             # widen accordingly, which is the intended de-bias (outside-
             # voice finding #4). It contributes no chunks/batches.
-            mark_reflected(conn, path, mtime=st.st_mtime, size=st.st_size, streaks=0, errors=0, duration_seconds=0.0)
+            mark_reflected(
+                conn,
+                path,
+                mtime=st.st_mtime,
+                size=st.st_size,
+                streaks=0,
+                errors=0,
+                duration_seconds=0.0,
+                tools_used=dict(signals.tools_used),
+            )
             continue
         chunks = [c.text for c in chunk_turns(turns)]
         # keep the densest chunks up to the per-session budget so one
@@ -182,6 +198,7 @@ def gather_pending_work(
                 error_count=sum(signals.error_repeats.values()),
                 duration_seconds=signals.duration_seconds or 0.0,
                 tool_error_repeats=dict(signals.tool_error_repeats),
+                tools_used=dict(signals.tools_used),
             )
         )
     return work
@@ -287,6 +304,7 @@ def run_sweep(
                     streaks=w.streak_count,
                     errors=w.error_count,
                     duration_seconds=w.duration_seconds,
+                    tools_used=w.tools_used,
                 )
                 stats["sessions_reflected"] += 1
         except Exception as exc:

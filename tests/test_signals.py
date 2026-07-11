@@ -2,8 +2,15 @@ from vidura.ingest import Turn
 from vidura.signals import extract_signals
 
 
-def _turn(type_, text="", tool_use=False, timestamp=None, model=None):
-    return Turn(type=type_, timestamp=timestamp, text=text, tool_use=tool_use, model=model)
+def _turn(type_, text="", tool_use=False, timestamp=None, model=None, tool_names=None):
+    return Turn(
+        type=type_,
+        timestamp=timestamp,
+        text=text,
+        tool_use=tool_use,
+        model=model,
+        tool_names=tool_names or [],
+    )
 
 
 def test_reprompt_streak_of_three_detected():
@@ -155,3 +162,42 @@ def test_tool_result_error_seen_twice_not_reported():
     ]
     signals = extract_signals(turns)
     assert signals.tool_error_repeats == {}
+
+
+def test_tools_used_counts_calls_across_assistant_turns():
+    turns = [
+        _turn("assistant", "reading", tool_use=True, tool_names=["Read"]),
+        _turn("assistant", "reading again", tool_use=True, tool_names=["Read"]),
+        _turn("assistant", "clicking", tool_use=True, tool_names=["mcp__playwright__click"]),
+    ]
+    signals = extract_signals(turns)
+    assert signals.tools_used == {"Read": 2, "mcp__playwright__click": 1}
+
+
+def test_tools_used_multiple_tool_calls_in_one_turn_all_counted():
+    turns = [
+        _turn("assistant", "multi-tool turn", tool_use=True, tool_names=["Read", "Bash", "Read"]),
+    ]
+    signals = extract_signals(turns)
+    assert signals.tools_used == {"Read": 2, "Bash": 1}
+
+
+def test_tools_used_empty_when_no_tool_calls():
+    turns = [
+        _turn("user", "hi"),
+        _turn("assistant", "hello back"),
+    ]
+    signals = extract_signals(turns)
+    assert signals.tools_used == {}
+
+
+def test_tools_used_ignores_user_turn_tool_names():
+    """tool_names is only ever populated on assistant turns by ingest.py,
+    but extract_signals should not count it from a user-type Turn even if
+    one were (defensively) constructed with tool_names set."""
+    turns = [
+        _turn("user", "hi", tool_names=["should-not-count"]),
+        _turn("assistant", "ok", tool_use=True, tool_names=["Read"]),
+    ]
+    signals = extract_signals(turns)
+    assert signals.tools_used == {"Read": 1}

@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 """
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA_V2 = """
 ALTER TABLE sessions ADD COLUMN streaks INTEGER;
@@ -114,6 +114,16 @@ DROP TRIGGER IF EXISTS chunks_ai;
 DROP TRIGGER IF EXISTS chunks_ad;
 DROP TABLE IF EXISTS chunks_fts;
 DROP TABLE IF EXISTS chunks;
+"""
+
+# v7: substrate for tool-usage follow-through (docs/design/
+# tool-recommender.md) — a per-session tool-name -> call-count map,
+# gathered the same way as streaks/errors/duration_seconds (sweep.py's
+# gather-time capture, persisted via mark_reflected). NULL on old rows
+# (backward compatible, no backfill) and on quiet/no-friction sessions
+# that pass an empty dict.
+_SCHEMA_V7 = """
+ALTER TABLE sessions ADD COLUMN tools_used TEXT;
 """
 
 # Indexes only — no schema/user_version bump needed (CREATE INDEX IF NOT
@@ -196,6 +206,13 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
         # Idempotent: DROP ... IF EXISTS makes a re-run over an
         # already-migrated (or fresh, chunk-table-less) db a no-op.
         conn.executescript(_SCHEMA_V6)
+        conn.execute("PRAGMA user_version = 6")
+        conn.commit()
+        version = 6
+    if version < 7:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+        if "tools_used" not in cols:
+            conn.executescript(_SCHEMA_V7)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     return conn
@@ -223,6 +240,7 @@ def mark_reflected(
     streaks: int | None = None,
     errors: int | None = None,
     duration_seconds: float | None = None,
+    tools_used: dict[str, int] | None = None,
 ) -> None:
     """Stamp path as reflected. mtime/size default to a fresh path.stat()
     when not provided, but callers that captured stats earlier (e.g. at
@@ -232,22 +250,29 @@ def mark_reflected(
 
     streaks/errors/duration_seconds are optional session-level signal
     columns (M1 memory); callers that don't pass them leave the columns
-    NULL, and existing sweep.py callers keep working unmodified."""
+    NULL, and existing sweep.py callers keep working unmodified.
+
+    tools_used (v7) is the per-session tool-name -> call-count map from
+    signals.SessionSignals — stored as JSON, same gather-time-capture
+    posture as the other signal columns. None (the default) leaves the
+    column NULL, same backward-compat behavior as streaks/errors."""
     if mtime is None or size is None:
         st = path.stat()
         mtime = st.st_mtime if mtime is None else mtime
         size = st.st_size if size is None else size
+    tools_used_json = json.dumps(tools_used) if tools_used is not None else None
     conn.execute(
-        """INSERT INTO sessions(path, mtime, size, reflected_at, streaks, errors, duration_seconds)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO sessions(path, mtime, size, reflected_at, streaks, errors, duration_seconds, tools_used)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(path) DO UPDATE SET
              mtime = excluded.mtime,
              size = excluded.size,
              reflected_at = excluded.reflected_at,
              streaks = excluded.streaks,
              errors = excluded.errors,
-             duration_seconds = excluded.duration_seconds""",
-        (str(path), mtime, size, _now(), streaks, errors, duration_seconds),
+             duration_seconds = excluded.duration_seconds,
+             tools_used = excluded.tools_used""",
+        (str(path), mtime, size, _now(), streaks, errors, duration_seconds, tools_used_json),
     )
     conn.commit()
 

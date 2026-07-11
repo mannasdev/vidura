@@ -326,6 +326,83 @@ def test_mark_reflected_stores_signal_columns(tmp_path):
     conn.close()
 
 
+def test_fresh_db_has_tools_used_column(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    assert "tools_used" in cols
+    conn.close()
+
+
+def test_v6_db_migrates_in_place_to_v7(tmp_path):
+    p = tmp_path / "db.sqlite"
+    conn = open_db(p)
+    conn.execute("PRAGMA user_version = 6")
+    conn.commit()
+    conn.close()
+    conn = open_db(p)  # reopen: must migrate 6 -> 7 without touching v6 tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    assert "tools_used" in cols
+    conn.close()
+
+
+def test_migration_v7_idempotent_on_reopen(tmp_path):
+    p = tmp_path / "db.sqlite"
+    open_db(p).close()
+    conn = open_db(p)  # second open: ALTER must not re-run
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    assert "tools_used" in cols
+    conn.close()
+
+
+def test_old_session_row_tolerates_null_tools_used(tmp_path):
+    """A session row written by an old (pre-v7) mark_reflected call, or
+    one that simply didn't pass tools_used, stores NULL — reading it
+    back must not raise."""
+    conn = open_db(tmp_path / "db.sqlite")
+    p = _session_file(tmp_path)
+    mark_reflected(conn, p, streaks=1, errors=0, duration_seconds=10.0)  # no tools_used
+    row = conn.execute("SELECT tools_used FROM sessions WHERE path = ?", (str(p),)).fetchone()
+    assert row["tools_used"] is None
+    conn.close()
+
+
+def test_mark_reflected_stores_and_roundtrips_tools_used(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    p = _session_file(tmp_path)
+    mark_reflected(
+        conn, p, streaks=1, errors=0, duration_seconds=10.0,
+        tools_used={"Read": 3, "mcp__playwright__click": 2},
+    )
+    row = conn.execute("SELECT tools_used FROM sessions WHERE path = ?", (str(p),)).fetchone()
+    import json as _json
+    assert _json.loads(row["tools_used"]) == {"Read": 3, "mcp__playwright__click": 2}
+    conn.close()
+
+
+def test_mark_reflected_tools_used_upserts(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    p = _session_file(tmp_path)
+    mark_reflected(conn, p, tools_used={"Read": 1})
+    mark_reflected(conn, p, tools_used={"Read": 5, "Bash": 1})
+    row = conn.execute("SELECT tools_used FROM sessions WHERE path = ?", (str(p),)).fetchone()
+    import json as _json
+    assert _json.loads(row["tools_used"]) == {"Read": 5, "Bash": 1}
+    conn.close()
+
+
+def test_mark_reflected_empty_dict_tools_used_stored_as_empty_json(tmp_path):
+    """An empty dict (a quiet session with truly no tool calls) is
+    distinguishable from NULL (a caller that never passed the arg)."""
+    conn = open_db(tmp_path / "db.sqlite")
+    p = _session_file(tmp_path)
+    mark_reflected(conn, p, tools_used={})
+    row = conn.execute("SELECT tools_used FROM sessions WHERE path = ?", (str(p),)).fetchone()
+    assert row["tools_used"] == "{}"
+    conn.close()
+
+
 def test_adopted_and_lapsed_block_resuggestion(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     record_suggestion(conn, _sugg())
@@ -410,7 +487,7 @@ from vidura.store import mark_celebrated
 def test_fresh_db_migrates_straight_to_v4(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION == 7
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
     assert "celebrated" in cols
     conn.close()

@@ -19,7 +19,7 @@ rest of an otherwise-readable session.
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -37,19 +37,26 @@ class Turn:
     # live in M0: tool-output spam dominated the friction-density ranking
     # while carrying zero human friction).
     is_tool_result: bool = False
+    # The "name" field off each tool_use block on an assistant turn (e.g.
+    # "Read", "Bash", or an MCP-style "mcp__playwright__click"). Substrate
+    # for the tool-usage signal (signals.py's tools_used) — the raw
+    # per-turn list, not yet aggregated; extraction happens once here so
+    # both signals.py and any future direct consumer read the same shape.
+    tool_names: list[str] = field(default_factory=list)
 
 
-def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool]:
+def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool, list[str]]:
     content = message.get("content")
     if isinstance(content, str):
-        return content, False, False
+        return content, False, False, []
     if not isinstance(content, list):
-        return "", False, False
+        return "", False, False, []
 
     text_parts: list[str] = []
     tool_use = False
     has_tool_result = False
     has_human_text = False
+    tool_names: list[str] = []
     for block in content:
         if not isinstance(block, dict):
             continue
@@ -60,6 +67,9 @@ def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool
             text_parts.append(block.get("text", ""))
         elif block_type == "tool_use":
             tool_use = True
+            name = block.get("name")
+            if isinstance(name, str) and name:
+                tool_names.append(name)
         elif block_type == "tool_result":
             has_tool_result = True
             result_content = block.get("content")
@@ -78,7 +88,7 @@ def _extract_text_and_tool_use(message: dict[str, Any]) -> tuple[str, bool, bool
                     if isinstance(sub_block, dict) and sub_block.get("type") == "text":
                         text_parts.append(sub_block.get("text", ""))
     is_tool_result = has_tool_result and not has_human_text
-    return "\n".join(text_parts), tool_use, is_tool_result
+    return "\n".join(text_parts), tool_use, is_tool_result, tool_names
 
 
 def parse_session(path: Path) -> Iterator[Turn]:
@@ -101,7 +111,7 @@ def parse_session(path: Path) -> Iterator[Turn]:
             if not isinstance(message, dict):
                 continue
 
-            text, tool_use, is_tool_result = _extract_text_and_tool_use(message)
+            text, tool_use, is_tool_result, tool_names = _extract_text_and_tool_use(message)
             yield Turn(
                 type=record_type,
                 timestamp=record.get("timestamp"),
@@ -109,4 +119,5 @@ def parse_session(path: Path) -> Iterator[Turn]:
                 tool_use=tool_use,
                 model=message.get("model"),
                 is_tool_result=is_tool_result,
+                tool_names=tool_names,
             )

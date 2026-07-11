@@ -34,6 +34,25 @@ def _write_friction_session(dirpath: Path, name: str) -> Path:
     return p
 
 
+def _tool_use_assistant_turn(names, ts="2026-07-01T10:00:05.000Z"):
+    content = [{"type": "text", "text": "using tools"}]
+    for n in names:
+        content.append({"type": "tool_use", "name": n, "input": {}})
+    return {"type": "assistant", "timestamp": ts, "message": {"role": "assistant", "model": "m", "content": content}}
+
+
+def _write_friction_session_with_tools(dirpath: Path, name: str, tool_names: list[str]) -> Path:
+    p = dirpath / name
+    turns = [
+        _user_turn("do the thing"),
+        _user_turn("no, not like that"),
+        _user_turn("still wrong"),
+        _tool_use_assistant_turn(tool_names),
+    ]
+    p.write_text("\n".join(json.dumps(t) for t in turns) + "\n", encoding="utf-8")
+    return p
+
+
 def _write_calm_session(dirpath: Path, name: str) -> Path:
     p = dirpath / name
     turns = [_user_turn("one thing"), _assistant_turn("done", tool_use=True)]
@@ -144,6 +163,33 @@ def test_gather_caps_per_session_chunks(tmp_path):
     conn.close()
 
 
+def test_gather_captures_tools_used_on_friction_session(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    _write_friction_session_with_tools(root, "friction.jsonl", ["Read", "mcp__playwright__click", "Read"])
+    work = gather_pending_work(conn, root=root, window_days=30)
+    assert work[0].tools_used == {"Read": 2, "mcp__playwright__click": 1}
+    conn.close()
+
+
+def test_gather_marks_quiet_session_with_tools_used(tmp_path):
+    """A calm (no-friction) session with tool calls still records
+    tools_used on the mark_reflected-with-zero-stats path — quiet
+    sessions are exactly where an adopted tool's usage should show up."""
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    p = root / "calm.jsonl"
+    turns = [_user_turn("one thing"), _tool_use_assistant_turn(["mcp__playwright__click"])]
+    p.write_text("\n".join(json.dumps(t) for t in turns) + "\n", encoding="utf-8")
+    work = gather_pending_work(conn, root=root, window_days=30)
+    assert work == []
+    row = conn.execute("SELECT tools_used FROM sessions WHERE path = ?", (str(p),)).fetchone()
+    assert json.loads(row["tools_used"]) == {"mcp__playwright__click": 1}
+    conn.close()
+
+
 def test_gather_captures_mtime_and_size_at_gather_time(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     root = tmp_path / "projects"
@@ -228,6 +274,17 @@ def test_run_sweep_records_and_marks(tmp_path):
     rows = ledger_entries(conn, status="pending")
     assert len(rows) == 1  # same fix_id from both batches merged
     assert rows[0]["occurrences"] == 2
+    conn.close()
+
+
+def test_run_sweep_persists_tools_used_via_mark_reflected(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    w = _work(tmp_path, "a.jsonl")
+    w.tools_used = {"Read": 4, "mcp__playwright__click": 2}
+    with patch("vidura.sweep.reflect", return_value=_response()):
+        run_sweep(conn, [[w]])
+    row = conn.execute("SELECT tools_used FROM sessions WHERE path = ?", (str(w.path),)).fetchone()
+    assert json.loads(row["tools_used"]) == {"Read": 4, "mcp__playwright__click": 2}
     conn.close()
 
 
