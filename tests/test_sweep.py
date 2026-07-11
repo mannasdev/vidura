@@ -56,6 +56,38 @@ def test_gather_skips_calm_and_already_reflected(tmp_path):
     conn.close()
 
 
+def test_gather_marks_quiet_session_reflected_with_zero_stats(tmp_path):
+    """No-friction sessions are stamped reflected (streaks=0/errors=0/
+    duration=0) instead of being left unmarked — otherwise a quiet
+    session gets re-parsed and re-redacted on every future sweep
+    forever (outside-voice finding #8)."""
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    calm = _write_calm_session(root, "calm.jsonl")
+    work = gather_pending_work(conn, root=root, window_days=30)
+    assert work == []
+    row = conn.execute("SELECT streaks, errors, duration_seconds FROM sessions WHERE path = ?", (str(calm),)).fetchone()
+    assert row is not None
+    assert (row["streaks"], row["errors"], row["duration_seconds"]) == (0, 0, 0.0)
+    conn.close()
+
+
+def test_gather_does_not_regather_quiet_session_next_call(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    root = tmp_path / "projects"
+    root.mkdir()
+    _write_calm_session(root, "calm.jsonl")
+    first = gather_pending_work(conn, root=root, window_days=30)
+    assert first == []
+    # second call: needs_reflection is now False for the quiet session,
+    # so it's skipped outright (not even re-parsed) — nothing to assert
+    # on chunks, just that it still yields no work and doesn't error.
+    second = gather_pending_work(conn, root=root, window_days=30)
+    assert second == []
+    conn.close()
+
+
 def test_gather_caps_per_session_chunks(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     root = tmp_path / "projects"
@@ -442,6 +474,57 @@ def test_main_prints_memory_status_active_line(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "vidura sweep: memory active" in err
     memory._reset_breaker_for_tests()
+
+
+def test_second_concurrent_sweep_skips_cleanly(tmp_path, monkeypatch, capsys):
+    """A held sweep-run lockfile makes a second `main()` invocation exit
+    0 immediately with one stderr line, touching no work."""
+    from vidura.sweep import _sweep_run_lock_path
+
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    lock_path = _sweep_run_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(__import__("time").time()), encoding="utf-8")
+
+    called = []
+    monkeypatch.setattr(
+        "vidura.sweep.gather_pending_work",
+        lambda conn, root, window_days, rescan=False: called.append(1) or [],
+    )
+    exit_code = main([])
+    assert exit_code == 0
+    assert called == []  # never got past the lock guard
+    err = capsys.readouterr().err
+    assert "another sweep is running" in err
+    lock_path.unlink()
+
+
+def test_sweep_run_lock_released_after_successful_run(tmp_path, monkeypatch):
+    from vidura.sweep import _sweep_run_lock_path
+
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    assert not _sweep_run_lock_path().exists()
+
+
+def test_stale_sweep_run_lock_is_ignored(tmp_path, monkeypatch):
+    import os
+
+    from vidura.sweep import SWEEP_RUN_LOCK_STALE_SECONDS, _sweep_run_lock_path
+
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    lock_path = _sweep_run_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("stale", encoding="utf-8")
+    old = __import__("time").time() - SWEEP_RUN_LOCK_STALE_SECONDS - 60
+    os.utime(lock_path, (old, old))
+
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    assert not lock_path.exists()  # a fresh run acquired and then released it (stale lock didn't block it)
 
 
 def test_sweep_memory_less_end_to_end_green(tmp_path, monkeypatch, capsys):

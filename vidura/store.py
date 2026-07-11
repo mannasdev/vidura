@@ -116,6 +116,18 @@ DROP TABLE IF EXISTS chunks_fts;
 DROP TABLE IF EXISTS chunks;
 """
 
+# Indexes only — no schema/user_version bump needed (CREATE INDEX IF NOT
+# EXISTS is idempotent on every open_db call, so a dedicated migration
+# step would just be ceremony). sessions.mtime backs character.py's
+# rolling-window scan and the pet's 30s poll of "what's new"; suggestions
+# status backs ledger_entries/blocked_fix_ids' WHERE status = ... filters
+# — both are polled every 60s by the pet (design review finding #8,
+# performance).
+_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_sessions_mtime ON sessions(mtime);
+CREATE INDEX IF NOT EXISTS idx_suggestions_status ON suggestions(status);
+"""
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -126,7 +138,21 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # Explicit concurrency posture — this db is opened by up to 3
+    # independent OS processes at once: the pet's own 30-min ambient
+    # sweep (StateModel.swift), the SessionEnd hook's detached sweep
+    # (hooks_cli.py), and an interactive CLI (vidura-ledger/vidura-do/a
+    # manual vidura-sweep). WAL lets readers and the one writer proceed
+    # without blocking each other; busy_timeout makes a writer-vs-writer
+    # collision retry for 5s instead of raising "database is locked"
+    # immediately (sweep.py's own process-level lock is the primary
+    # writer-serialization mechanism — this is the belt-and-braces
+    # fallback for the cases it doesn't cover, e.g. a CLI command racing
+    # a sweep).
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(_SCHEMA)
+    conn.executescript(_INDEXES)
     conn.commit()
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < 2:

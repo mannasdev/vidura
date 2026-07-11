@@ -43,6 +43,17 @@ class ChunkHit:
 # Trips on the first request failure/timeout, OR once cumulative
 # supermemory wall-time in this process exceeds 30s. Once tripped, all
 # calls skip instantly — exactly one stderr note is ever printed.
+#
+# This budget is PER-PROCESS, not global: the pet's ambient sweep, the
+# SessionEnd hook's detached sweep, and an interactive CLI invocation
+# are 3 independent OS processes, each with its own module-level
+# _cumulative_wall_time. Worst case, a slow-but-not-failing supermemory
+# endpoint can burn up to 3x BREAKER_WALL_TIME_BUDGET_SECONDS of real
+# wall-time across the topology before every process has independently
+# tripped its own breaker. Accepted: making the breaker process-shared
+# would need its own cross-process coordination (a file, a socket) for
+# a budget whose entire purpose is bounding worst-case latency, not
+# correctness — not worth the complexity at this scale.
 
 BREAKER_WALL_TIME_BUDGET_SECONDS = 30.0
 

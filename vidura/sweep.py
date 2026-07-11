@@ -9,7 +9,10 @@ sweep (session limit, ctrl-C) resumes where it left off.
 """
 
 import argparse
+import contextlib
+import os
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +21,7 @@ from vidura.chunk import chunk_turns
 from vidura.contract import CONTRACT_VERSION, PAYLOAD_BUDGET_CHARS, ReflectRequest
 from vidura.fix_index import load_fix_index
 from vidura.follow_through import evaluate_follow_through
+from vidura.hooks_cli import _support_dir
 from vidura.ingest import parse_session
 from vidura.memory import memory_status, remember_chunks, search_chunks
 from vidura.redact import redact
@@ -38,6 +42,66 @@ from vidura.store import (
 
 PER_SESSION_CHUNK_BUDGET = 24000
 DEFAULT_MAX_BATCHES = 20
+
+# Process-level single-chokepoint lock: 3 independent OS processes can
+# invoke a sweep concurrently (the pet's own 30-min ambient sweep, which
+# calls vidura-sweep directly — bypassing hooks_cli entirely; the
+# SessionEnd hook's detached sweep; and a manual/interactive vidura-sweep
+# run). This is a SEPARATE lockfile from hooks_cli's sweep.lock —
+# hooks_cli's lock only dedups hook-triggered SPAWNS (so a burst of
+# SessionEnd events doesn't queue up N sweep processes); this lock is
+# the actual mutex around doing sweep work at all, regardless of which
+# of the 3 callers is doing it. Keeping them separate avoids a
+# double-lock deadlock: hooks_cli writes+holds its own lock for the
+# lifetime of the spawned subprocess (cleared by a bash trap on exit),
+# so if run_sweep tried to acquire THAT same file it would always see
+# its own parent's lock and refuse to run.
+_SWEEP_RUN_LOCK_NAME = "sweep-run.lock"
+SWEEP_RUN_LOCK_STALE_SECONDS = 45 * 60
+
+
+def _sweep_run_lock_path() -> Path:
+    return _support_dir() / _SWEEP_RUN_LOCK_NAME
+
+
+@contextlib.contextmanager
+def _sweep_run_lock():
+    """O_EXCL lockfile: the single chokepoint serializing sweep work
+    across all 3 concurrent callers (pet ambient sweep, hook-spawned
+    sweep, interactive CLI). A second concurrent sweep sees the lock
+    already held and yields False (never blocks/retries) — sweeps are
+    resume-safe by design (sessions are only marked reflected batch by
+    batch), so skipping this run entirely is correct, not lossy: the
+    next sweep picks up exactly where the skipped one would have
+    started. A stale lock (holder crashed without cleanup) is treated
+    as absent after SWEEP_RUN_LOCK_STALE_SECONDS."""
+    lock_path = _sweep_run_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mtime = lock_path.stat().st_mtime
+        if (time.time() - mtime) >= SWEEP_RUN_LOCK_STALE_SECONDS:
+            with contextlib.suppress(FileNotFoundError):
+                lock_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    fd = None
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        yield False
+        return
+    try:
+        os.write(fd, str(time.time()).encode())
+        os.close(fd)
+        fd = None
+        yield True
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            lock_path.unlink()
 
 
 @dataclass
@@ -78,6 +142,18 @@ def gather_pending_work(
             turn.text = redact(turn.text)
         signals = extract_signals(turns)
         if not (signals.reprompt_streaks or signals.error_repeats):
+            # No friction signal: mark reflected with zero stats instead
+            # of leaving it unmarked. Previously this session would be
+            # re-parsed and re-redacted on EVERY future sweep forever
+            # (outside-voice finding #8) — quiet sessions never earned a
+            # sessions-table row, so the steady-state rescan cost only
+            # grew. Consequence (also see docs/design/system-review-
+            # 2026-07-11.md): sessions/character/mood metrics now measure
+            # ALL sessions in the window, not just friction sessions —
+            # character.py's n_sessions/sessions_per_day denominators
+            # widen accordingly, which is the intended de-bias (outside-
+            # voice finding #4). It contributes no chunks/batches.
+            mark_reflected(conn, path, mtime=st.st_mtime, size=st.st_size, streaks=0, errors=0, duration_seconds=0.0)
             continue
         chunks = [c.text for c in chunk_turns(turns)]
         # keep the densest chunks up to the per-session budget so one
@@ -257,40 +333,45 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    conn = open_db()
-    try:
-        print(f"vidura sweep: memory {memory_status()}", file=sys.stderr)
-        expired = expire_stale_pending(conn)
-        if expired:
+    with _sweep_run_lock() as acquired:
+        if not acquired:
+            print("vidura sweep: another sweep is running", file=sys.stderr)
+            return 0
+
+        conn = open_db()
+        try:
+            print(f"vidura sweep: memory {memory_status()}", file=sys.stderr)
+            expired = expire_stale_pending(conn)
+            if expired:
+                print(
+                    f"vidura sweep: expired {len(expired)} stale pending suggestion(s) "
+                    "(older than 14 days undecided)",
+                    file=sys.stderr,
+                )
+            work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days, rescan=args.rescan)
+            if not work:
+                print("Nothing new to sweep — all friction sessions already reflected.")
+                _maybe_report_character_evolution(conn)
+                _print_ledger_report(conn)
+                return 0
+            batches = pack_batches(work)
+            max_batches = None if args.full else args.batches
+            stats = run_sweep(conn, batches, max_batches=max_batches)
             print(
-                f"vidura sweep: expired {len(expired)} stale pending suggestion(s) "
-                "(older than 14 days undecided)",
-                file=sys.stderr,
+                f"Sweep: {stats['batches_run']} batches run, {stats['batches_failed']} failed, "
+                f"{stats['sessions_reflected']} sessions reflected, "
+                f"{stats['suggestions_recorded']} suggestions recorded.\n"
             )
-        work = gather_pending_work(conn, root=CLAUDE_PROJECTS_DIR, window_days=args.window_days, rescan=args.rescan)
-        if not work:
-            print("Nothing new to sweep — all friction sessions already reflected.")
+            for _suggestion_id, fix_id, verdict in evaluate_follow_through(conn):
+                if verdict == "adopted":
+                    print(f"Follow-through: [{fix_id}] adopted — behavior changed since you accepted it.")
+                elif verdict == "lapsed":
+                    print(f"Follow-through: [{fix_id}] lapsed — accepted 2+ weeks ago, behavior unchanged.")
             _maybe_report_character_evolution(conn)
             _print_ledger_report(conn)
             return 0
-        batches = pack_batches(work)
-        max_batches = None if args.full else args.batches
-        stats = run_sweep(conn, batches, max_batches=max_batches)
-        print(
-            f"Sweep: {stats['batches_run']} batches run, {stats['batches_failed']} failed, "
-            f"{stats['sessions_reflected']} sessions reflected, "
-            f"{stats['suggestions_recorded']} suggestions recorded.\n"
-        )
-        for _suggestion_id, fix_id, verdict in evaluate_follow_through(conn):
-            if verdict == "adopted":
-                print(f"Follow-through: [{fix_id}] adopted — behavior changed since you accepted it.")
-            elif verdict == "lapsed":
-                print(f"Follow-through: [{fix_id}] lapsed — accepted 2+ weeks ago, behavior unchanged.")
-        _maybe_report_character_evolution(conn)
-        _print_ledger_report(conn)
-        return 0
-    finally:
-        conn.close()
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

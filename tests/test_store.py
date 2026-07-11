@@ -32,6 +32,31 @@ def test_open_db_env_override(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_open_db_sets_wal_and_busy_timeout(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    conn.close()
+
+
+def test_open_db_creates_sessions_mtime_and_suggestions_status_indexes(tmp_path):
+    conn = open_db(tmp_path / "db.sqlite")
+    indexes = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_sessions_mtime" in indexes
+    assert "idx_suggestions_status" in indexes
+    conn.close()
+
+
+def test_open_db_index_creation_idempotent_on_reopen(tmp_path):
+    p = tmp_path / "db.sqlite"
+    open_db(p).close()
+    conn = open_db(p)  # second open: CREATE INDEX IF NOT EXISTS must not error
+    indexes = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_sessions_mtime" in indexes
+    assert "idx_suggestions_status" in indexes
+    conn.close()
+
+
 from vidura.store import mark_reflected, needs_reflection
 
 
