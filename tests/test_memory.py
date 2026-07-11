@@ -511,3 +511,25 @@ def test_get_context_empty_when_memory_off(tmp_path):
     conn = _db(tmp_path)
     assert get_context(conn, ["timeout"], token_budget=1000) == ""
     conn.close()
+
+
+def test_search_drops_hit_with_naive_created_at(monkeypatch):
+    # A naive (timezone-less) timestamp cannot compare with the aware
+    # cutoff — must be dropped like a missing created_at, never raise
+    # (degrade-to-silence holds inside the memory layer itself).
+    from vidura import memory
+
+    memory._reset_breaker_for_tests()
+    monkeypatch.setenv("SUPERMEMORY_CC_API_KEY", "sm_test")
+    response = {
+        "results": [
+            {
+                "metadata": {"session_basename": "s.jsonl", "created_at": "2026-07-01T00:00:00"},
+                "score": 0.9,
+                "chunks": [{"content": "naive timestamp hit"}],
+            }
+        ]
+    }
+    monkeypatch.setattr(memory, "_supermemory_request", lambda *a, **k: response)
+    hits = memory._supermemory_search(("http://localhost:6767", "sm_test"), ["term"], k=5, exclude_basenames=set())
+    assert hits == []

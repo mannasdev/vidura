@@ -210,9 +210,13 @@ def _supermemory_search(cfg: tuple[str, str], terms: list[str], k: int, exclude_
             continue  # missing created_at -> dropped (read-side age filter)
         try:
             created_dt = datetime.fromisoformat(created_at)
-        except ValueError:
+            stale = created_dt < cutoff
+        except (ValueError, TypeError):
+            # TypeError: a naive (timezone-less) created_at can't compare
+            # with the aware cutoff — treat unparseable/incomparable
+            # timestamps as unverifiable and drop, same as missing.
             continue
-        if created_dt < cutoff:
+        if stale:
             continue  # older than the retention window -> dropped
         for chunk in result.get("chunks", []):
             hits.append(
