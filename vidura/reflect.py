@@ -65,7 +65,12 @@ def build_prompt(request: ReflectRequest) -> str:
     past_friction_block = ""
     if request.similar_past_friction:
         past_friction_text = "\n\n---\n\n".join(request.similar_past_friction)
-        past_friction_block = f"<similar_past_friction>\n{past_friction_text}\n</similar_past_friction>\n\n"
+        past_friction_block = (
+            "<similar_past_friction>\n"
+            "background context — do not quote as evidence\n\n"
+            f"{past_friction_text}\n"
+            "</similar_past_friction>\n\n"
+        )
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"<signals>\n{signals_text}\n</signals>\n\n"

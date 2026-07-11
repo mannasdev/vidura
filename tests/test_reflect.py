@@ -189,3 +189,4 @@ def test_build_prompt_renders_past_friction_between_sessions_and_fixes():
     prompt = build_prompt(req)
     assert prompt.index("<recent_sessions>") < prompt.index("<similar_past_friction>") < prompt.index("<fix_index>")
     assert "ENEEDAUTH before" in prompt
+    assert "background context — do not quote as evidence" in prompt

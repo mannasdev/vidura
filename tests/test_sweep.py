@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from vidura.store import mark_reflected, open_db
 from vidura.sweep import (
@@ -267,30 +268,47 @@ def test_main_batches_flag_caps(tmp_path, monkeypatch):
     assert mock_reflect.call_count == 1
 
 
-def test_run_sweep_remembers_chunks_on_success(tmp_path):
+def test_run_sweep_remembers_chunks_on_success(monkeypatch, tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
+    monkeypatch.setenv("SUPERMEMORY_CC_API_KEY", "sm_test_key")
+    import vidura.memory as memory
+    memory._reset_breaker_for_tests()
+    remembered = []
+    monkeypatch.setattr(
+        "vidura.sweep.remember_chunks",
+        lambda conn, session_path, chunks, *a, **kw: remembered.append((session_path, chunks)),
+    )
     batches = [[_work(tmp_path, "a.jsonl")]]
     with patch("vidura.sweep.reflect", return_value=_response()):
         run_sweep(conn, batches)
-    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 1
+    assert len(remembered) == 1
     conn.close()
 
 
-def test_failed_batch_remembers_nothing(tmp_path):
+def test_failed_batch_remembers_nothing(monkeypatch, tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
+    remembered = []
+    monkeypatch.setattr(
+        "vidura.sweep.remember_chunks",
+        lambda conn, session_path, chunks, *a, **kw: remembered.append((session_path, chunks)),
+    )
     batches = [[_work(tmp_path, "a.jsonl")]]
     with patch("vidura.sweep.reflect", side_effect=ReflectorError("down")):
         run_sweep(conn, batches)
-    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
+    assert remembered == []
     conn.close()
 
 
-def test_batch_request_includes_retrieved_past_friction(tmp_path):
+def test_batch_request_includes_retrieved_past_friction(monkeypatch, tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
-    from vidura.memory import remember_chunks
-    remember_chunks(conn, "/old/session.jsonl", ["[user] npm error ENEEDAUTH from history"])
     w = _work(tmp_path, "a.jsonl")
     w.error_keys = ["npm error ENEEDAUTH"]
+    monkeypatch.setattr(
+        "vidura.sweep.search_chunks",
+        lambda conn, terms, k=5, exclude_sessions=None: [
+            SimpleNamespace(text="[user] npm error ENEEDAUTH from history")
+        ],
+    )
     with patch("vidura.sweep.reflect", return_value=_response()) as mock_reflect:
         run_sweep(conn, [[w]])
     request = mock_reflect.call_args[0][0]
@@ -401,3 +419,40 @@ def test_main_no_evolution_line_when_character_unchanged(tmp_path, monkeypatch, 
     assert exit_code == 0
     err = capsys.readouterr().err
     assert "your pet evolved" not in err
+
+
+def test_main_prints_memory_status_off_line(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.delenv("SUPERMEMORY_CC_API_KEY", raising=False)
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "vidura sweep: memory off" in err
+
+
+def test_main_prints_memory_status_active_line(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.setenv("SUPERMEMORY_CC_API_KEY", "sm_test_key")
+    import vidura.memory as memory
+    memory._reset_breaker_for_tests()
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: [])
+    exit_code = main([])
+    assert exit_code == 0
+    err = capsys.readouterr().err
+    assert "vidura sweep: memory active" in err
+    memory._reset_breaker_for_tests()
+
+
+def test_sweep_memory_less_end_to_end_green(tmp_path, monkeypatch, capsys):
+    """No SUPERMEMORY_CC_API_KEY: the whole sweep flow runs exactly like
+    M0 — remember_chunks/search_chunks silently no-op, nothing raises."""
+    monkeypatch.setenv("VIDURA_DB_PATH", str(tmp_path / "db.sqlite"))
+    monkeypatch.delenv("SUPERMEMORY_CC_API_KEY", raising=False)
+    work = [_work(tmp_path, "a.jsonl", streaks=3)]
+    monkeypatch.setattr("vidura.sweep.gather_pending_work", lambda conn, root, window_days, rescan=False: work)
+    with patch("vidura.sweep.reflect", return_value=_response()):
+        exit_code = main([])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "judge-executor-split" in out

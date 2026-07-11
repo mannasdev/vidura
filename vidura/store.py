@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 );
 """
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA_V2 = """
 ALTER TABLE sessions ADD COLUMN streaks INTEGER;
@@ -103,12 +103,18 @@ CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
 END;
 """
 
-
-def fts_available(conn: sqlite3.Connection) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunks_fts'"
-    ).fetchone()
-    return row is not None
+# v6: supermemory replaces the homegrown FTS5 chunk store as THE memory
+# backend (docs/design/supermemory-adoption.md). Chunk memory is derived
+# data (rebuilds from future sweeps), so this migration DROPs the chunks
+# table, its FTS5 shadow index, and the sync triggers that kept them in
+# lockstep — no backfill. State tables (sessions, suggestions,
+# executions, character_history) are untouched.
+_SCHEMA_V6 = """
+DROP TRIGGER IF EXISTS chunks_ai;
+DROP TRIGGER IF EXISTS chunks_ad;
+DROP TABLE IF EXISTS chunks_fts;
+DROP TABLE IF EXISTS chunks;
+"""
 
 
 def _now() -> str:
@@ -150,6 +156,13 @@ def open_db(path: Path | None = None) -> sqlite3.Connection:
         tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "character_history" not in tables:
             conn.executescript(_SCHEMA_V5)
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+        version = 5
+    if version < 6:
+        # Idempotent: DROP ... IF EXISTS makes a re-run over an
+        # already-migrated (or fresh, chunk-table-less) db a no-op.
+        conn.executescript(_SCHEMA_V6)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     return conn

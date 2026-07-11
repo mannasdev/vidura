@@ -209,14 +209,12 @@ def test_record_suggestion_forces_novel_semantics_for_fix_id_novel(tmp_path):
     conn.close()
 
 
-from vidura.store import SCHEMA_VERSION, fts_available
+from vidura.store import SCHEMA_VERSION
 
 
-def test_migration_sets_user_version_and_creates_chunks(tmp_path):
+def test_migration_sets_user_version(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert "chunks" in tables
     conn.close()
 
 
@@ -226,6 +224,71 @@ def test_migration_idempotent_on_existing_db(tmp_path):
     conn = open_db(p)  # second open: ALTERs must not re-run
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     assert {"streaks", "errors", "duration_seconds"} <= cols
+    conn.close()
+
+
+def test_migration_drops_chunk_tables_and_triggers(tmp_path):
+    """v6: supermemory replaces the homegrown FTS5 chunk store — a fresh
+    db never creates chunks/chunks_fts/their triggers at all."""
+    conn = open_db(tmp_path / "db.sqlite")
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "chunks" not in tables
+    assert "chunks_fts" not in tables
+    triggers = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    assert "chunks_ai" not in triggers
+    assert "chunks_ad" not in triggers
+    conn.close()
+
+
+def test_migration_drops_chunk_tables_from_pre_v6_db(tmp_path):
+    """A db that already has v2-era chunks/chunks_fts (simulating an
+    existing install) gets them dropped on upgrade to v6, while state
+    tables are untouched."""
+    p = tmp_path / "db.sqlite"
+    conn = open_db(p)
+    conn.execute("PRAGMA user_version = 5")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_path TEXT NOT NULL,
+            text TEXT NOT NULL,
+            user_turns INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            text, content='chunks', content_rowid='id'
+        );
+        CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+        END;
+        """
+    )
+    conn.execute("INSERT INTO chunks(session_path, text, user_turns, created_at) VALUES ('/s/a', 'hi', 0, 'now')")
+    conn.commit()
+    conn.close()
+
+    conn = open_db(p)  # reopen: migrates 5 -> 6, dropping chunk tables
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "chunks" not in tables
+    assert "chunks_fts" not in tables
+    # state tables untouched
+    assert "sessions" in tables
+    assert "suggestions" in tables
+    assert "executions" in tables
+    assert "character_history" in tables
+    conn.close()
+
+
+def test_migration_v6_idempotent_on_reopen(tmp_path):
+    p = tmp_path / "db.sqlite"
+    open_db(p).close()
+    conn = open_db(p)  # second open: DROP IF EXISTS must not error
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     conn.close()
 
 
@@ -246,12 +309,6 @@ def test_adopted_and_lapsed_block_resuggestion(tmp_path):
     record_suggestion(conn, _sugg(confidence=0.95))
     assert ledger_entries(conn, status="pending") == []
     assert "judge-executor-split" in blocked_fix_ids(conn)
-    conn.close()
-
-
-def test_fts_available_true_on_modern_sqlite(tmp_path):
-    conn = open_db(tmp_path / "db.sqlite")
-    assert fts_available(conn) is True
     conn.close()
 
 
@@ -277,7 +334,7 @@ def test_v2_db_migrates_in_place_to_v3(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "executions" in tables
-    assert "chunks" in tables  # v2 migration didn't re-run/duplicate
+    assert "chunks" not in tables  # v6 migration drops it (supermemory replaces it)
     conn.close()
 
 
@@ -328,7 +385,7 @@ from vidura.store import mark_celebrated
 def test_fresh_db_migrates_straight_to_v4(tmp_path):
     conn = open_db(tmp_path / "db.sqlite")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 6
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(suggestions)")}
     assert "celebrated" in cols
     conn.close()

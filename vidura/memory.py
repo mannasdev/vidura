@@ -1,25 +1,32 @@
 """Memory retrieval — the ONLY read surface the future MCP server wraps.
 
-FTS5/BM25 lexical retrieval behind a narrow interface (see
-docs/design/m1-memory.md): friction vocabulary is highly lexical, and a
-vector backend can replace the internals of search_chunks later without
-touching any caller. Degrades to LIKE when FTS5 is unavailable.
-Agents read; only Vidura writes (remember_chunks/prune are called by the
-sweep only, never exposed via the context API).
+Supermemory is THE memory layer (docs/design/supermemory-adoption.md) —
+one memory system, not two: no homegrown FTS5 index alongside it.
+`SUPERMEMORY_CC_API_KEY` set turns memory on; unset, Vidura runs
+memory-less — remember_chunks no-ops and
+search_chunks returns [] — exactly like M0. Agents read; only Vidura
+writes (remember_chunks/search_chunks are called by the sweep and the
+reflector's retrieval step, never exposed via a write-capable API).
 """
 
 import json
 import os
-import sqlite3
 import sys
+import sqlite3
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-
-from vidura.store import fts_available
+from os.path import basename
+from urllib.parse import urlparse
 
 SUPERMEMORY_CONTAINER_TAG = "vidura"
 SUPERMEMORY_TIMEOUT_SECONDS = 5
+SUPERMEMORY_DEFAULT_URL = "http://localhost:6767"
+MEMORY_RETENTION_DAYS = 90
+
+_LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 @dataclass
@@ -31,15 +38,88 @@ class ChunkHit:
     created_at: str
 
 
+# --- circuit breaker (module-level: process-lifetime state) ---
+#
+# Trips on the first request failure/timeout, OR once cumulative
+# supermemory wall-time in this process exceeds 30s. Once tripped, all
+# calls skip instantly — exactly one stderr note is ever printed.
+
+BREAKER_WALL_TIME_BUDGET_SECONDS = 30.0
+
+_breaker_tripped = False
+_breaker_reason: str | None = None
+_cumulative_wall_time = 0.0
+_breaker_note_printed = False
+
+
+def _reset_breaker_for_tests() -> None:
+    """Test-only helper: module-level breaker state otherwise leaks
+    across tests since it's process-lifetime by design."""
+    global _breaker_tripped, _breaker_reason, _cumulative_wall_time, _breaker_note_printed
+    _breaker_tripped = False
+    _breaker_reason = None
+    _cumulative_wall_time = 0.0
+    _breaker_note_printed = False
+
+
+def _trip_breaker(reason: str) -> None:
+    global _breaker_tripped, _breaker_reason, _breaker_note_printed
+    _breaker_tripped = True
+    _breaker_reason = reason
+    if not _breaker_note_printed:
+        print(f"vidura: supermemory circuit breaker tripped ({reason}); memory disabled for this run", file=sys.stderr)
+        _breaker_note_printed = True
+
+
+def breaker_tripped() -> bool:
+    return _breaker_tripped
+
+
+# --- activation + remote gate ---
+
+_remote_gate_note_printed = False
+
+
+def _is_local_host(url: str) -> bool:
+    host = urlparse(url).hostname
+    return host in _LOCALHOST_HOSTS
+
+
 def _supermemory_config() -> tuple[str, str] | None:
-    """(base_url, api_key) if VIDURA_MEMORY_BACKEND=blend and a key is set, else None."""
-    if os.environ.get("VIDURA_MEMORY_BACKEND") != "blend":
-        return None
+    """(base_url, api_key) if SUPERMEMORY_CC_API_KEY is set and the
+    remote gate + circuit breaker both allow it, else None.
+
+    Remote-URL hard gate: a non-localhost VIDURA_SUPERMEMORY_URL requires
+    VIDURA_SUPERMEMORY_ALLOW_REMOTE=1, else memory disables for the
+    process with exactly one stderr line — detached sweeps make ordinary
+    warnings invisible, so a gate is the only observable control.
+    """
+    global _remote_gate_note_printed
     api_key = os.environ.get("SUPERMEMORY_CC_API_KEY")
     if not api_key:
         return None
-    url = os.environ.get("VIDURA_SUPERMEMORY_URL", "http://localhost:6767")
+    if _breaker_tripped:
+        return None
+    url = os.environ.get("VIDURA_SUPERMEMORY_URL", SUPERMEMORY_DEFAULT_URL)
+    if not _is_local_host(url) and os.environ.get("VIDURA_SUPERMEMORY_ALLOW_REMOTE") != "1":
+        if not _remote_gate_note_printed:
+            print(
+                f"vidura: VIDURA_SUPERMEMORY_URL ({url}) is not localhost and "
+                "VIDURA_SUPERMEMORY_ALLOW_REMOTE!=1; memory disabled for this run",
+                file=sys.stderr,
+            )
+            _remote_gate_note_printed = True
+        return None
     return (url, api_key)
+
+
+def memory_status() -> str:
+    """One-word status for diagnosability: off / active / breaker-tripped."""
+    if _breaker_tripped:
+        return "breaker-tripped"
+    if _supermemory_config() is not None:
+        return "active"
+    return "off"
 
 
 def _supermemory_request(cfg: tuple[str, str], method: str, path: str, body: dict | None = None) -> dict:
@@ -51,24 +131,41 @@ def _supermemory_request(cfg: tuple[str, str], method: str, path: str, body: dic
         method=method,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=SUPERMEMORY_TIMEOUT_SECONDS) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    start = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=SUPERMEMORY_TIMEOUT_SECONDS) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    finally:
+        global _cumulative_wall_time
+        _cumulative_wall_time += time.monotonic() - start
+        if _cumulative_wall_time > BREAKER_WALL_TIME_BUDGET_SECONDS and not _breaker_tripped:
+            _trip_breaker(f"cumulative supermemory wall-time exceeded {BREAKER_WALL_TIME_BUDGET_SECONDS}s")
 
 
-def _supermemory_push(cfg: tuple[str, str], session_path: str, chunks: list[str], now: str) -> None:
-    # Best-effort mirror to the external store: never let a supermemory
-    # outage break remember_chunks (the local FTS5 write already happened).
+def _supermemory_push(cfg: tuple[str, str], session_basename: str, chunks: list[str], now: str) -> None:
+    # Best-effort: never let a supermemory outage break remember_chunks.
+    # Idempotent re-push: list docs scoped by BOTH containerTag and
+    # session_basename (the tag conjunct is mandatory — listing by
+    # basename alone on a shared server could bulk-delete another app's
+    # docs that happen to reuse the same session filename).
     try:
         existing = _supermemory_request(
             cfg,
             "POST",
             "/v3/documents/list",
-            {"filters": {"AND": [{"filterType": "metadata", "key": "session_path", "value": session_path}]}},
+            {
+                "filters": {
+                    "AND": [
+                        {"filterType": "metadata", "key": "session_basename", "value": session_basename},
+                    ]
+                },
+                "containerTags": [SUPERMEMORY_CONTAINER_TAG],
+            },
         )
         ids = [m["id"] for m in existing.get("memories", [])]
         if ids:
             _supermemory_request(cfg, "DELETE", "/v3/documents/bulk", {"ids": ids})
-        for text in chunks:
+        for i, text in enumerate(chunks):
             _supermemory_request(
                 cfg,
                 "POST",
@@ -76,17 +173,20 @@ def _supermemory_push(cfg: tuple[str, str], session_path: str, chunks: list[str]
                 {
                     "content": text,
                     "containerTag": SUPERMEMORY_CONTAINER_TAG,
-                    "metadata": {"session_path": session_path, "created_at": now},
+                    "metadata": {
+                        "session_basename": session_basename,
+                        "chunk_index": i,
+                        "created_at": now,
+                    },
                     "taskType": "memory",
                 },
             )
     except Exception as exc:
-        print(f"vidura: supermemory push failed, continuing FTS5-only ({exc})", file=sys.stderr)
+        if not _breaker_tripped:
+            _trip_breaker(f"request failed ({exc})")
 
 
-def _supermemory_search(cfg: tuple[str, str], terms: list[str], k: int, exclude_sessions: set[str]) -> list[ChunkHit]:
-    # Best-effort: any failure here just means search_chunks falls back to
-    # its FTS5 results, same contract as _supermemory_push.
+def _supermemory_search(cfg: tuple[str, str], terms: list[str], k: int, exclude_basenames: set[str]) -> list[ChunkHit]:
     try:
         response = _supermemory_request(
             cfg,
@@ -95,24 +195,37 @@ def _supermemory_search(cfg: tuple[str, str], terms: list[str], k: int, exclude_
             {"containerTag": SUPERMEMORY_CONTAINER_TAG, "q": " ".join(terms)},
         )
     except Exception as exc:
-        print(f"vidura: supermemory search failed, continuing FTS5-only ({exc})", file=sys.stderr)
+        if not _breaker_tripped:
+            _trip_breaker(f"request failed ({exc})")
         return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MEMORY_RETENTION_DAYS)
     hits: list[ChunkHit] = []
     for result in response.get("results", []):
         metadata = result.get("metadata") or {}
-        session_path = metadata.get("session_path")
-        if not session_path or session_path in exclude_sessions:
+        session_basename = metadata.get("session_basename")
+        if not session_basename or session_basename in exclude_basenames:
             continue
+        created_at = metadata.get("created_at")
+        if not created_at:
+            continue  # missing created_at -> dropped (read-side age filter)
+        try:
+            created_dt = datetime.fromisoformat(created_at)
+        except ValueError:
+            continue
+        if created_dt < cutoff:
+            continue  # older than the retention window -> dropped
         for chunk in result.get("chunks", []):
             hits.append(
                 ChunkHit(
                     chunk_id=-1,
-                    session_path=session_path,
+                    session_path=session_basename,
                     text=chunk.get("content", ""),
                     score=result.get("score", 0.0),
-                    created_at=metadata.get("created_at", ""),
+                    created_at=created_at,
                 )
             )
+    # Higher-is-better similarity score (supermemory), single scale.
+    hits.sort(key=lambda h: h.score, reverse=True)
     return hits[:k]
 
 
@@ -122,26 +235,16 @@ def remember_chunks(
     chunks: list[str],
     user_turns_per_chunk: list[int] | None = None,
 ) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    turns = user_turns_per_chunk or [0] * len(chunks)
-    # Delete-then-insert in one transaction so a resumed sweep re-running
-    # remember_chunks for a session already stored is idempotent (no
-    # unique constraint on session_path means a naive append would
-    # duplicate chunks). The chunks_ad trigger cleans the FTS index too.
-    conn.execute("DELETE FROM chunks WHERE session_path = ?", (session_path,))
-    conn.executemany(
-        "INSERT INTO chunks(session_path, text, user_turns, created_at) VALUES (?, ?, ?, ?)",
-        [(session_path, text, t, now) for text, t in zip(chunks, turns)],
-    )
-    conn.commit()
+    """Push redacted chunk text to supermemory. Silently no-ops when
+    memory is off (no key, remote-gated, or breaker-tripped) — `conn`
+    stays in the signature per the interface contract even though chunks
+    no longer live in SQLite (it's available for future exclusion/state
+    lookups without changing callers)."""
     cfg = _supermemory_config()
-    if cfg is not None and chunks:
-        _supermemory_push(cfg, session_path, chunks, now)
-
-
-def _fts_query(terms: list[str]) -> str:
-    quoted = ['"' + t.replace('"', '""') + '"' for t in terms if t.strip()]
-    return " OR ".join(quoted)
+    if cfg is None or not chunks:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    _supermemory_push(cfg, basename(session_path), chunks, now)
 
 
 def search_chunks(
@@ -150,65 +253,28 @@ def search_chunks(
     k: int = 5,
     exclude_sessions: set[str] | None = None,
 ) -> list[ChunkHit]:
-    query = _fts_query(terms)
-    if not query:
+    """Search supermemory. Returns [] when memory is off — no stderr
+    spam, that's the memory-less-mode contract."""
+    query_terms = [t for t in terms if t.strip()]
+    if not query_terms:
         return []
-    exclude = exclude_sessions or set()
-    ordered_exclude = sorted(exclude)
-    placeholders = ", ".join("?" for _ in ordered_exclude)
-    exclusion_sql = f" AND c.session_path NOT IN ({placeholders})" if ordered_exclude else ""
-    if fts_available(conn):
-        rows = conn.execute(
-            "SELECT c.id, c.session_path, c.text, bm25(chunks_fts) AS score, c.created_at "
-            "FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid "
-            f"WHERE chunks_fts MATCH ?{exclusion_sql} ORDER BY score LIMIT ?",
-            (query, *ordered_exclude, k),
-        ).fetchall()
-    else:
-        print("vidura: FTS5 unavailable, LIKE fallback", file=sys.stderr)
-        first = next((t for t in terms if t.strip()), None)
-        if first is None:
-            return []
-        exclusion_sql_like = exclusion_sql.replace("c.session_path", "session_path")
-        rows = conn.execute(
-            "SELECT id, session_path, text, 0.0 AS score, created_at FROM chunks "
-            f"WHERE text LIKE ?{exclusion_sql_like} ORDER BY id DESC LIMIT ?",
-            (f"%{first}%", *ordered_exclude, k),
-        ).fetchall()
-    fts_hits = [
-        ChunkHit(r["id"], r["session_path"], r["text"], r["score"], r["created_at"])
-        for r in rows
-    ]
     cfg = _supermemory_config()
     if cfg is None:
-        return fts_hits
-    seen = {(h.session_path, h.text) for h in fts_hits}
-    merged = list(fts_hits)
-    for hit in _supermemory_search(cfg, terms, k=k, exclude_sessions=exclude):
-        identity = (hit.session_path, hit.text)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        merged.append(hit)
-        if len(merged) >= k:
-            break
-    return merged[:k]
-
-
-def prune_chunks(conn: sqlite3.Connection, days: int = 90) -> int:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    cur = conn.execute("DELETE FROM chunks WHERE created_at < ?", (cutoff,))
-    conn.commit()
-    return cur.rowcount
+        return []
+    exclude = exclude_sessions or set()
+    exclude_basenames = {basename(p) for p in exclude}
+    return _supermemory_search(cfg, query_terms, k=k, exclude_basenames=exclude_basenames)
 
 
 def search_sessions(conn: sqlite3.Connection, terms: list[str], k: int = 10) -> list[tuple[str, float]]:
+    """Best-scoring session per basename, single scale (supermemory
+    similarity, higher-better) — sorted descending."""
     hits = search_chunks(conn, terms, k=k * 4)
     best: dict[str, float] = {}
     for h in hits:
-        if h.session_path not in best or h.score < best[h.session_path]:
+        if h.session_path not in best or h.score > best[h.session_path]:
             best[h.session_path] = h.score
-    return sorted(best.items(), key=lambda kv: kv[1])[:k]
+    return sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:k]
 
 
 def get_context(conn: sqlite3.Connection, terms: list[str], token_budget: int) -> str:

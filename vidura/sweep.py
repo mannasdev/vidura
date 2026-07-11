@@ -19,7 +19,7 @@ from vidura.contract import CONTRACT_VERSION, PAYLOAD_BUDGET_CHARS, ReflectReque
 from vidura.fix_index import load_fix_index
 from vidura.follow_through import evaluate_follow_through
 from vidura.ingest import parse_session
-from vidura.memory import prune_chunks, remember_chunks, search_chunks
+from vidura.memory import memory_status, remember_chunks, search_chunks
 from vidura.redact import redact
 from vidura.reflect import reflect
 from vidura.report import CLAUDE_PROJECTS_DIR, DEFAULT_WINDOW_DAYS, find_recent_sessions
@@ -259,9 +259,7 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = open_db()
     try:
-        pruned = prune_chunks(conn)
-        if pruned:
-            print(f"vidura sweep: pruned {pruned} chunks older than 90 days", file=sys.stderr)
+        print(f"vidura sweep: memory {memory_status()}", file=sys.stderr)
         expired = expire_stale_pending(conn)
         if expired:
             print(
