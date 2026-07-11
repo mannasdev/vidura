@@ -8,9 +8,10 @@ outcomes into process exit codes.
 """
 
 import argparse
+import subprocess
 import sys
 
-from vidura.executor import ExecutionDeclined, execute_action
+from vidura.executor import CwdGuardError, ExecutionDeclined, ExecutionError, execute_action
 from vidura.fix_index import load_fix_index
 from vidura.store import ledger_entries, open_db
 
@@ -75,12 +76,20 @@ def main(argv: list[str] | None = None) -> int:
         except ExecutionDeclined as e:
             print(str(e), file=sys.stderr)
             return 2
-        except PermissionError as e:
+        except (PermissionError, CwdGuardError) as e:
             print(str(e), file=sys.stderr)
             return 1
         except ValueError as e:
             print(str(e), file=sys.stderr)
             return 1
+        except (ExecutionError, subprocess.TimeoutExpired) as e:
+            # A confirmed action that failed to even run/complete
+            # (timeout, missing binary, filesystem error) — already
+            # audited by executor.py before this was raised. Never a
+            # raw traceback: same exit code as an ordinary nonzero-exit
+            # 'failed' status below.
+            print(str(e), file=sys.stderr)
+            return 3
 
         if status == "dry-run":
             print("dry-run: no side effects, nothing recorded.")

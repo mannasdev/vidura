@@ -37,6 +37,7 @@ def test_accepted_inform_fix_explains_no_action(tmp_path, monkeypatch, capsys):
 
 def test_accepted_copy_action_succeeds(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
     with patch("vidura.executor.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 0
@@ -48,6 +49,7 @@ def test_accepted_copy_action_succeeds(tmp_path, monkeypatch, capsys):
 
 def test_dry_run_prints_and_exits_zero(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
     with patch("vidura.executor.subprocess.run") as mock_run:
         rc = main(["1", "--dry-run"])
@@ -59,6 +61,7 @@ def test_dry_run_prints_and_exits_zero(tmp_path, monkeypatch, capsys):
 
 def test_declined_confirmation_exits_two(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     _seed(tmp_path, monkeypatch, fix_id="missing-claude-md", status="accepted")
     with patch("vidura.do_cli._tty_confirm", return_value=False):
         rc = main(["1"])
@@ -74,6 +77,7 @@ def test_unknown_id_exits_nonzero(tmp_path, monkeypatch, capsys):
 
 def test_failed_execution_exits_three(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     _seed(tmp_path, monkeypatch, fix_id="github-context-by-paste", status="accepted")
     with patch("vidura.do_cli._tty_confirm", return_value=True):
         with patch("vidura.executor.subprocess.run") as mock_run:
@@ -88,6 +92,7 @@ def test_failed_execution_exits_three(tmp_path, monkeypatch, capsys):
 
 def test_yes_flag_executes_copy_without_confirm_prompt(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
     with patch("vidura.do_cli._tty_confirm") as mock_confirm:
         with patch("vidura.executor.subprocess.run") as mock_run:
@@ -100,6 +105,7 @@ def test_yes_flag_executes_copy_without_confirm_prompt(tmp_path, monkeypatch, ca
 
 def test_yes_flag_bypasses_confirm_for_tier2_write(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     _seed(tmp_path, monkeypatch, fix_id="missing-claude-md", status="accepted")
     with patch("vidura.do_cli._tty_confirm") as mock_confirm:
         rc = main(["1", "--yes"])
@@ -110,6 +116,7 @@ def test_yes_flag_bypasses_confirm_for_tier2_write(tmp_path, monkeypatch, capsys
 
 def test_yes_plus_kill_switch_still_refuses_tier2(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     monkeypatch.setenv("VIDURA_EXECUTION", "off")
     _seed(tmp_path, monkeypatch, fix_id="missing-claude-md", status="accepted")
     rc = main(["1", "--yes"])
@@ -119,6 +126,7 @@ def test_yes_plus_kill_switch_still_refuses_tier2(tmp_path, monkeypatch, capsys)
 
 def test_dry_run_wins_over_yes(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
     with patch("vidura.executor.subprocess.run") as mock_run:
         rc = main(["1", "--yes", "--dry-run"])
@@ -129,6 +137,7 @@ def test_dry_run_wins_over_yes(tmp_path, monkeypatch, capsys):
 
 def test_yes_flag_recorded_as_normal_done_audit(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     db, row_id = _seed(tmp_path, monkeypatch, fix_id="spec-before-code", status="accepted")
     with patch("vidura.executor.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 0
@@ -141,3 +150,43 @@ def test_yes_flag_recorded_as_normal_done_audit(tmp_path, monkeypatch, capsys):
     conn.close()
     assert len(audits) == 1
     assert audits[0]["status"] == "done"
+
+
+def test_run_timeout_exits_three_with_audit_no_traceback(tmp_path, monkeypatch, capsys):
+    """A post-confirm subprocess timeout must never surface as a raw
+    traceback — do_cli catches the audited ExecutionError and exits 3,
+    same exit code as an ordinary nonzero-exit failure."""
+    import subprocess
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    db, row_id = _seed(tmp_path, monkeypatch, fix_id="github-context-by-paste", status="accepted")
+    with patch("vidura.do_cli._tty_confirm", return_value=True):
+        with patch(
+            "vidura.executor.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="brew", timeout=300),
+        ):
+            rc = main([str(row_id)])
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "timed out" in err.lower()
+    conn = open_db(db)
+    from vidura.store import executions_for
+
+    audits = executions_for(conn, row_id)
+    conn.close()
+    assert len(audits) == 1
+    assert audits[0]["status"] == "timeout"
+
+
+def test_write_cwd_guard_exits_one_no_traceback(tmp_path, monkeypatch, capsys):
+    """A tmp dir with no .git and not $HOME/root refuses WRITE with a
+    clear message and exit 1, not a raw traceback."""
+    monkeypatch.chdir(tmp_path)  # deliberately NOT creating .git
+    db, row_id = _seed(tmp_path, monkeypatch, fix_id="missing-claude-md", status="accepted")
+    with patch("vidura.do_cli._tty_confirm", return_value=True):
+        rc = main([str(row_id)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "terminal inside the target repo" in err
+    assert not (tmp_path / "CLAUDE.md").exists()

@@ -222,6 +222,39 @@ def test_build_report_request_tool_error_repeats_alone_excludes_chunks(tmp_path)
     assert request.chunks == []
 
 
+def test_print_report_strips_control_chars(capsys):
+    """Parity with sweep.py's _print_ledger_report: model-echoed
+    blunt_summary/evidence text can carry ANSI escape sequences from
+    the original terminal session — report.py's single-pass printer
+    must sanitize them too, not just sweep.py's."""
+    from vidura.contract import ReflectRequest
+
+    request = ReflectRequest(
+        contract_version=CONTRACT_VERSION,
+        signals={"sessions_scanned": 1},
+        chunks=[],
+        fix_index=[],
+        ledger=[],
+    )
+    response = ReflectResponse(
+        contract_version=CONTRACT_VERSION,
+        suggestions=[
+            Suggestion(
+                fix_id="judge-executor-split",
+                confidence=0.85,
+                evidence=["\x1b[31mred quote\x1b[0m"],
+                blunt_summary="\x1b[31msummary with escape\x1b[0m",
+            )
+        ],
+    )
+    with patch("vidura.report.reflect", return_value=response):
+        print_report(request)
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert "summary with escape" in out
+    assert "red quote" in out
+
+
 def test_main_no_sessions_found(monkeypatch, capsys):
     monkeypatch.setattr("vidura.report.find_recent_sessions", lambda: [])
     exit_code = main()

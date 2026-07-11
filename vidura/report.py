@@ -29,7 +29,7 @@ from vidura.ingest import parse_session
 from vidura.redact import redact
 from vidura.reflect import CLAUDE_CLI_CWD_TOKEN, ReflectorError, reflect
 from vidura.signals import extract_signals
-from vidura.store import blocked_fix_ids, ledger_summary_for_prompt, open_db
+from vidura.store import _sanitize, blocked_fix_ids, ledger_summary_for_prompt, open_db
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 # 14 days, not 30: old friction shouldn't drive counsel — habits may have
@@ -170,9 +170,14 @@ def print_report(request: ReflectRequest, blocked: set[str] | None = None) -> in
     print(f"Vidura friction report — {sessions_scanned} sessions scanned\n")
     for suggestion in suggestions:
         print(f"- [{suggestion.fix_id}] confidence={suggestion.confidence:.2f}")
-        print(f"  {suggestion.blunt_summary}")
+        # Parity with sweep.py's _print_ledger_report: model-echoed
+        # blunt_summary/evidence text can carry ANSI escape sequences
+        # from the original terminal session (see store._sanitize) —
+        # sweep.py already stripped these, report.py's single-pass
+        # printer didn't.
+        print(f"  {_sanitize(suggestion.blunt_summary)}")
         for quote in suggestion.evidence:
-            print(f"    > {quote}")
+            print(f"    > {_sanitize(quote)}")
         print()
     return 0
 

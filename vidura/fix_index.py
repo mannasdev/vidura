@@ -221,7 +221,11 @@ FIX_INDEX: list[Fix] = [
             tier=3,
             label="Install the Playwright MCP",
             payload="",
-            argv=["claude", "mcp", "add", "playwright", "--", "npx", "-y", "@playwright/mcp@latest"],
+            # Pinned, not @latest: an unpinned RUN argv means the exact
+            # code executed on the user's machine can change out from
+            # under this fix-index entry without a Vidura release —
+            # verified against npm's "latest" dist-tag 2026-07-11.
+            argv=["claude", "mcp", "add", "playwright", "--", "npx", "-y", "@playwright/mcp@0.0.78"],
         ),
     ),
     Fix(
@@ -274,7 +278,9 @@ FIX_INDEX: list[Fix] = [
             tier=3,
             label="Install the test-driven-development skill",
             payload="",
-            argv=["npx", "-y", "skillfish", "add", "obra/superpowers", "test-driven-development"],
+            # Pinned, not bare "skillfish" (implicit @latest) — see the
+            # Playwright MCP fix's argv comment above for the rationale.
+            argv=["npx", "-y", "skillfish@1.0.38", "add", "obra/superpowers", "test-driven-development"],
         ),
     ),
     Fix(
@@ -295,7 +301,7 @@ FIX_INDEX: list[Fix] = [
             tier=3,
             label="Install the systematic-debugging skill",
             payload="",
-            argv=["npx", "-y", "skillfish", "add", "obra/superpowers", "systematic-debugging"],
+            argv=["npx", "-y", "skillfish@1.0.38", "add", "obra/superpowers", "systematic-debugging"],
         ),
     ),
     Fix(
