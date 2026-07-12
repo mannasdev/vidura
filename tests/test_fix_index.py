@@ -45,13 +45,19 @@ _V1_ACTION_IDS = {
     "missing-claude-md",
     "permission-prompt-fatigue",
     "spec-before-code",
+    "docs-by-paste",
+    "single-long-session-no-checkpoints",
+    "structural-refactor-by-regex",
+    "unmeasured-perf-claims",
+    "security-review-skipped",
+    "ui-design-churn",
 }
 
 
-def test_exactly_seven_fixes_carry_an_action():
+def test_exactly_thirteen_fixes_carry_an_action():
     fixes = load_fix_index()
     with_action = [f for f in fixes if f.action is not None]
-    assert len(with_action) == 7
+    assert len(with_action) == 13
     assert {f.id for f in with_action} == _V1_ACTION_IDS
 
 
@@ -95,10 +101,89 @@ def test_write_action_has_target_file():
 
 def test_copy_actions_have_payload_text():
     copy_fixes = [f for f in load_fix_index() if f.action and f.action.tier == 1]
-    assert len(copy_fixes) == 2
+    assert len(copy_fixes) == 5
     for fix in copy_fixes:
         assert fix.action.payload
         assert fix.action.argv is None
+
+
+def _fix_by_id(fix_id):
+    return next(f for f in load_fix_index() if f.id == fix_id)
+
+
+def test_docs_by_paste_installs_context7():
+    fix = _fix_by_id("docs-by-paste")
+    assert fix.action.tier == 3
+    assert fix.action.argv == [
+        "claude", "mcp", "add", "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.3",
+    ]
+    # `claude mcp add` without -s writes the repo-local MCP config, so
+    # the executor's cwd guard must apply.
+    assert fix.action.requires_repo is True
+    assert fix.action.verify_argv == ["claude", "mcp", "list"]
+    assert fix.action.verify_expect == "context7"
+    assert fix.adoption_tool == "context7"
+
+
+def test_checkpoint_fix_copies_commit_commands_plugin():
+    fix = _fix_by_id("single-long-session-no-checkpoints")
+    assert fix.action.tier == 1
+    assert fix.action.payload == "/plugin install commit-commands@claude-plugins-official"
+
+
+def test_structural_refactor_fix_installs_ast_grep():
+    fix = _fix_by_id("structural-refactor-by-regex")
+    assert fix.confidence_floor == 0.65
+    assert fix.action.tier == 3
+    assert fix.action.argv == ["brew", "install", "ast-grep"]
+    assert fix.action.verify_expect == "ast-grep"
+
+
+def test_unmeasured_perf_fix_installs_hyperfine():
+    fix = _fix_by_id("unmeasured-perf-claims")
+    assert fix.confidence_floor == 0.65
+    assert fix.action.tier == 3
+    assert fix.action.argv == ["brew", "install", "hyperfine"]
+    assert fix.action.verify_expect == "hyperfine"
+
+
+def test_brew_run_actions_are_machine_global_and_verifiable():
+    # brew installs land machine-wide regardless of cwd, so the repo
+    # guard must not block them; each still verifies the binary landed.
+    for fix_id in ("structural-refactor-by-regex", "unmeasured-perf-claims"):
+        fix = _fix_by_id(fix_id)
+        assert fix.action.requires_repo is False
+        assert fix.action.verify_argv
+        # CLI usage happens inside Bash calls, invisible to tools_used —
+        # no adoption_tool means no false "lapsed" verdicts.
+        assert fix.adoption_tool is None
+
+
+def test_security_review_fix_copies_plugin_install():
+    fix = _fix_by_id("security-review-skipped")
+    assert fix.confidence_floor == 0.7
+    assert fix.action.tier == 1
+    assert fix.action.payload == "/plugin install security-guidance@claude-plugins-official"
+
+
+def test_ui_design_churn_fix_copies_plugin_install():
+    fix = _fix_by_id("ui-design-churn")
+    assert fix.confidence_floor == 0.65
+    assert fix.action.tier == 1
+    assert fix.action.payload == "/plugin install frontend-design@claude-plugins-official"
+
+
+def test_backend_state_by_paste_is_inform_only():
+    fix = _fix_by_id("backend-state-by-paste")
+    assert fix.confidence_floor == 0.65
+    assert fix.action is None
+    assert fix.adoption_tool is None
+
+
+def test_fix_metrics_maps_docs_by_paste_to_tool_usage():
+    from vidura.follow_through import FIX_METRICS
+
+    assert FIX_METRICS["docs-by-paste"] == "tool-usage"
 
 
 def test_fix_action_dataclass_shape():
