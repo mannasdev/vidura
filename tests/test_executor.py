@@ -106,6 +106,66 @@ def test_write_appends_once_after_confirm_true(tmp_path, monkeypatch):
     assert rows[0]["tier"] == 2
 
 
+def _nested_write_fix():
+    # Scaffold targets like .claude/agents/<name>.md live under
+    # directories most repos don't have yet — the WRITE tier must create
+    # the missing parents itself (open("a") only creates the file).
+    return Fix(
+        id="code-review-by-author",
+        title="t",
+        friction_patterns=["p"],
+        remedy="r",
+        confidence_floor=0.5,
+        action=FixAction(
+            tier=2,
+            label="Write a code-reviewer subagent starter",
+            payload="---\nname: code-reviewer\n---\n",
+            target_file=".claude/agents/code-reviewer.md",
+        ),
+    )
+
+
+def test_write_creates_missing_parent_directories(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "code-review-by-author")
+    status = execute_action(conn, row, _nested_write_fix(), confirm=_always_yes)
+    assert status == "done"
+    target = tmp_path / ".claude" / "agents" / "code-reviewer.md"
+    assert target.read_text() == "---\nname: code-reviewer\n---\n"
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+
+
+def test_write_decline_creates_no_parent_directories(tmp_path, monkeypatch):
+    """A declined WRITE must leave zero filesystem traces — parent dirs
+    are created only after the user confirms, so declining a nested
+    target can't leave an empty .claude/ tree behind."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "code-review-by-author")
+    with pytest.raises(ExecutionDeclined):
+        execute_action(conn, row, _nested_write_fix(), confirm=_always_no)
+    assert not (tmp_path / ".claude").exists()
+    rows = executions_for(conn, row["id"])
+    assert len(rows) == 1
+    assert rows[0]["status"] == "declined"
+
+
+def test_write_dry_run_creates_no_parent_directories(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    conn = open_db(tmp_path / "db.sqlite")
+    row = _suggestion_row(conn, "code-review-by-author")
+    status = execute_action(conn, row, _nested_write_fix(), confirm=_always_yes, dry_run=True)
+    assert status == "dry-run"
+    assert not (tmp_path / ".claude").exists()
+    assert executions_for(conn, row["id"]) == []
+
+
 def test_write_confirm_false_declines_and_touches_nothing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir(exist_ok=True)

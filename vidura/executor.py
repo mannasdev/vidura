@@ -176,6 +176,14 @@ def _execute_write(conn, suggestion_id: int, fix: Fix, *, confirm, dry_run: bool
         raise ExecutionDeclined(f"vidura: declined writing to {target}")
 
     try:
+        # Scaffold targets (e.g. ".claude/agents/code-reviewer.md") often
+        # live under directories the repo doesn't have yet — open("a")
+        # creates a missing file but not missing parents. Created only
+        # here, post-confirm: a declined or dry-run action must leave
+        # zero filesystem traces. The containment guard above already
+        # proved target resolves inside cwd, so target.parent does too —
+        # this can never mkdir outside the repo.
+        target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a") as f:
             f.write(action.payload)
     except OSError as exc:
