@@ -51,13 +51,16 @@ _V1_ACTION_IDS = {
     "unmeasured-perf-claims",
     "security-review-skipped",
     "ui-design-churn",
+    "code-review-by-author",
+    "ritual-prompt-not-codified",
+    "manual-batch-orchestration",
 }
 
 
-def test_exactly_thirteen_fixes_carry_an_action():
+def test_exactly_sixteen_fixes_carry_an_action():
     fixes = load_fix_index()
     with_action = [f for f in fixes if f.action is not None]
-    assert len(with_action) == 13
+    assert len(with_action) == 16
     assert {f.id for f in with_action} == _V1_ACTION_IDS
 
 
@@ -90,13 +93,25 @@ def test_run_actions_have_argv_list_and_no_shell_metachars_needed():
             assert set(token) <= _SAFE_TOKEN_CHARS
 
 
-def test_write_action_has_target_file():
+def test_write_actions_have_target_file_and_payload():
     write_fixes = [f for f in load_fix_index() if f.action and f.action.tier == 2]
-    assert len(write_fixes) == 1
-    fix = write_fixes[0]
-    assert fix.id == "missing-claude-md"
+    assert len(write_fixes) == 4
+    assert {f.id for f in write_fixes} == {
+        "missing-claude-md",
+        "code-review-by-author",
+        "ritual-prompt-not-codified",
+        "manual-batch-orchestration",
+    }
+    for fix in write_fixes:
+        assert fix.action.target_file
+        assert fix.action.payload
+        assert fix.action.argv is None
+
+
+def test_missing_claude_md_writes_claude_md():
+    fix = _fix_by_id("missing-claude-md")
+    assert fix.action.tier == 2
     assert fix.action.target_file == "CLAUDE.md"
-    assert fix.action.payload
 
 
 def test_copy_actions_have_payload_text():
@@ -171,6 +186,63 @@ def test_ui_design_churn_fix_copies_plugin_install():
     assert fix.confidence_floor == 0.65
     assert fix.action.tier == 1
     assert fix.action.payload == "/plugin install frontend-design@claude-plugins-official"
+
+
+def test_code_review_by_author_writes_subagent_starter():
+    fix = _fix_by_id("code-review-by-author")
+    assert fix.confidence_floor == 0.7
+    assert fix.action.tier == 2
+    # Documented subagent location: .claude/agents/<file>.md with YAML
+    # frontmatter (name/description/tools) and the system prompt as body.
+    assert fix.action.target_file == ".claude/agents/code-reviewer.md"
+    # Frontmatter must sit at byte 0: this payload CREATES a fresh file,
+    # and a leading blank line makes the YAML frontmatter unparseable
+    # (Claude Code silently drops description/tools).
+    assert fix.action.payload.startswith("---\n")
+    assert "name: code-reviewer" in fix.action.payload
+    assert "description:" in fix.action.payload
+    assert "tools: Read, Grep, Glob, Bash" in fix.action.payload
+    assert "TODO" in fix.action.payload
+
+
+def test_ritual_fix_writes_skill_starter():
+    fix = _fix_by_id("ritual-prompt-not-codified")
+    assert fix.confidence_floor == 0.65
+    assert fix.action.tier == 2
+    # Documented skill location: .claude/skills/<dir>/SKILL.md — the
+    # DIRECTORY name is the /command name, so the payload must tell the
+    # user to rename the directory, not a frontmatter name field.
+    assert fix.action.target_file == ".claude/skills/repeated-ritual/SKILL.md"
+    # Byte-0 frontmatter, same constraint as the subagent starter.
+    assert fix.action.payload.startswith("---\n")
+    assert "description:" in fix.action.payload
+    assert "TODO" in fix.action.payload
+
+
+def test_manual_batch_orchestration_writes_workflow_starter():
+    fix = _fix_by_id("manual-batch-orchestration")
+    assert fix.confidence_floor == 0.7
+    assert fix.action.tier == 2
+    # Documented workflow location: .claude/workflows/<name>.js opening
+    # with `export const meta = { name, description }`.
+    assert fix.action.target_file == ".claude/workflows/batch-chore.js"
+    assert fix.action.payload.startswith("export const meta")
+    assert "TODO" in fix.action.payload
+    # `export` forces the ES-module parse goal, where a top-level
+    # `return` is a SyntaxError — the starter must be valid JS as-is.
+    assert "\nreturn " not in fix.action.payload
+
+
+def test_scaffold_fixes_have_no_adoption_tool():
+    # Subagent/skill/workflow usage shows up in tools_used only as the
+    # generic Task/Skill/Workflow tool names — too coarse to attribute
+    # to any one scaffold, so adoption is unmeasurable and left unset.
+    for fix_id in (
+        "code-review-by-author",
+        "ritual-prompt-not-codified",
+        "manual-batch-orchestration",
+    ):
+        assert _fix_by_id(fix_id).adoption_tool is None
 
 
 def test_backend_state_by_paste_is_inform_only():

@@ -629,6 +629,138 @@ FIX_INDEX: list[Fix] = [
         # safe install argv to ship.
         confidence_floor=0.65,
     ),
+    # The three scaffold fixes below carry no adoption_tool: subagent,
+    # skill, and workflow usage surfaces in tools_used only as the
+    # generic Task/Skill/Workflow tool names — too coarse to attribute
+    # to any one scaffold, so adoption is unmeasurable. Left unset
+    # rather than faked (same policy as the ast-grep fix above).
+    Fix(
+        id="code-review-by-author",
+        title="Implementing session reviews its own change",
+        friction_patterns=[
+            "the session that wrote a change is asked to review it (author bias, context polluted by the implementation)",
+            "repeated 'review this' prompts inside the implementing session",
+            "self-review that misses bugs a fresh reader would catch",
+        ],
+        remedy=(
+            "Add a project code-reviewer subagent — fresh context, no "
+            "authorship bias. Dispatched after each change, it reads the "
+            "diff cold and returns only findings, instead of the author "
+            "grading its own work."
+        ),
+        confidence_floor=0.7,
+        action=FixAction(
+            tier=2,
+            label="Write a code-reviewer subagent starter",
+            # Documented subagent format: .claude/agents/<file>.md, YAML
+            # frontmatter (name, description, tools), body is the
+            # subagent's system prompt. No leading newline (unlike the
+            # CLAUDE.md starter, which appends to an EXISTING file): this
+            # creates a fresh file, and frontmatter that is not at byte 0
+            # does not parse — Claude Code would silently lose the
+            # description and tools restriction.
+            payload=(
+                "---\n"
+                "name: code-reviewer\n"
+                "description: Reviews a completed change for correctness bugs, risky patterns, and missed edge cases. Use after finishing a change, before committing.\n"
+                "tools: Read, Grep, Glob, Bash\n"
+                "---\n\n"
+                "You are a code reviewer looking at a change you did not write. Review\n"
+                "the working diff (git diff HEAD) with fresh eyes.\n\n"
+                "Focus on:\n"
+                "- TODO: project-specific correctness concerns (invariants, error handling)\n"
+                "- TODO: project conventions worth enforcing in review\n\n"
+                "Report findings ranked by severity, each with file:line and a concrete\n"
+                "failure scenario. Say \"no findings\" when the diff is clean — do not\n"
+                "invent nitpicks.\n"
+            ),
+            target_file=".claude/agents/code-reviewer.md",
+        ),
+    ),
+    Fix(
+        id="ritual-prompt-not-codified",
+        title="The same multi-step instructions re-typed every session",
+        friction_patterns=[
+            "the same multi-step instructions typed or pasted across sessions",
+            "a prompt preamble recurring session after session",
+            "'then run X, then Y' sequences repeated verbatim",
+        ],
+        remedy=(
+            "Codify the ritual as a project skill: .claude/skills/<dir>/"
+            "SKILL.md, where the DIRECTORY name becomes the /command. One "
+            "command replaces the re-typed block, and the steps live in "
+            "the repo instead of your muscle memory."
+        ),
+        confidence_floor=0.65,
+        action=FixAction(
+            tier=2,
+            label="Write a starter skill for the ritual",
+            # Documented skill format: .claude/skills/<dir>/SKILL.md —
+            # the directory name IS the /command name (a frontmatter
+            # name field does not change it), hence the rename note.
+            # No leading newline: fresh-file frontmatter must sit at
+            # byte 0 to parse (see the code-reviewer payload comment).
+            payload=(
+                "---\n"
+                "description: TODO — one line on when to use this ritual. Rename the repeated-ritual directory to name the /command.\n"
+                "---\n\n"
+                "# TODO: ritual name\n\n"
+                "1. TODO: first step of the ritual\n"
+                "2. TODO: next step\n"
+                "3. TODO: how to verify the ritual worked\n\n"
+                "> NOTE: the DIRECTORY name is the /command — rename\n"
+                "> .claude/skills/repeated-ritual/ to e.g.\n"
+                "> .claude/skills/release-checklist/ and the command becomes\n"
+                "> /release-checklist. Delete this note once the steps above are\n"
+                "> filled in.\n"
+            ),
+            target_file=".claude/skills/repeated-ritual/SKILL.md",
+        ),
+    ),
+    Fix(
+        id="manual-batch-orchestration",
+        title="Repetitive multi-item chores hand-driven one item at a time",
+        friction_patterns=[
+            "the same prompt run manually over many files/items one at a time",
+            "multi-step batch chores re-orchestrated by hand each time",
+            "the user acting as the loop over a work-list",
+        ],
+        remedy=(
+            "Save a workflow: .claude/workflows/<name>.js becomes a "
+            "/command that fans the chore out over subagents — the "
+            "workflow is the loop, not you. (Workflows are a paid-plan "
+            "feature.)"
+        ),
+        confidence_floor=0.7,
+        action=FixAction(
+            tier=2,
+            label="Write a starter workflow",
+            # Documented workflow format: .claude/workflows/<name>.js
+            # starting with `export const meta = { name, description }`,
+            # body built from agent()/pipeline()/parallel(). No top-level
+            # `return`: `export` forces the ES-module parse goal, where a
+            # top-level return is a SyntaxError — the starter must be
+            # valid under standard tooling, not only inside the workflow
+            # runtime's wrapped body.
+            payload=(
+                "export const meta = {\n"
+                "  name: 'batch-chore',\n"
+                "  description: 'TODO: one line describing the chore this fans out',\n"
+                "};\n\n"
+                "// TODO: replace the discovery prompt with how to find the work items.\n"
+                "const items = await agent(\n"
+                "  'TODO: list the items to process, one per line'\n"
+                ");\n\n"
+                "// TODO: replace the per-item prompt with the actual chore.\n"
+                "const results = await pipeline(\n"
+                "  items.split('\\n').filter(Boolean),\n"
+                "  (item) => agent(`TODO: process ${item}`)\n"
+                ");\n\n"
+                "log(`batch-chore: ${results.filter(Boolean).length} items processed`);\n"
+            ),
+            target_file=".claude/workflows/batch-chore.js",
+        ),
+    ),
 ]
 
 
