@@ -30,6 +30,11 @@ FIX_METRICS: dict[str, str] = {
     "repeated-error-loop": "errors",
     "single-long-session-no-checkpoints": "long",
     "manual-ui-verification": "tool-usage",
+    # context7 adoption is visible in tools_used (mcp__context7__* tool
+    # names). The CLI (brew) and plugin (COPY) fixes are deliberately
+    # absent: they run inside Bash calls or skills, never appearing in
+    # tools_used, so any metric for them would be a lie.
+    "docs-by-paste": "tool-usage",
 }
 
 MIN_BEFORE = 3

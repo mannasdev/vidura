@@ -115,9 +115,16 @@ FIX_INDEX: list[Fix] = [
         ],
         remedy=(
             "Commit working increments as you go, not just at the end. "
-            "Smaller commits make it easier to recover from a bad turn."
+            "Smaller commits make it easier to recover from a bad turn. "
+            "The official commit-commands plugin adds slash commands that "
+            "make checkpoint commits a one-liner instead of a ceremony."
         ),
         confidence_floor=0.6,
+        action=FixAction(
+            tier=1,
+            label="Copy the commit-commands plugin install",
+            payload="/plugin install commit-commands@claude-plugins-official",
+        ),
     ),
     Fix(
         id="plan-mode-skipped",
@@ -283,9 +290,24 @@ FIX_INDEX: list[Fix] = [
         remedy=(
             "Let the agent fetch docs itself (web fetch or a docs MCP) — pasted "
             "docs eat your context window and go stale; fetched docs arrive "
-            "exactly when needed."
+            "exactly when needed. The Context7 MCP injects version-pinned "
+            "library docs on demand, killing hallucinated-API loops, and works "
+            "without an API key."
         ),
         confidence_floor=0.6,
+        action=FixAction(
+            tier=3,
+            label="Install the Context7 MCP",
+            payload="",
+            argv=["claude", "mcp", "add", "context7", "--", "npx", "-y", "@upstash/context7-mcp@3.2.3"],
+            # `claude mcp add` without -s writes the repo-local MCP
+            # config, so the cwd guard applies (requires_repo default
+            # True kept explicit here for symmetry with the brew fixes).
+            requires_repo=True,
+            verify_argv=["claude", "mcp", "list"],
+            verify_expect="context7",
+        ),
+        adoption_tool="context7",
     ),
     Fix(
         id="fix-without-failing-test",
@@ -495,6 +517,116 @@ FIX_INDEX: list[Fix] = [
             "done in the opening prompt (or a quick plan-mode pass) — steering "
             "upfront is cheaper than braking mid-flight."
         ),
+        confidence_floor=0.65,
+    ),
+    Fix(
+        id="structural-refactor-by-regex",
+        title="Multi-file structural edits attempted with text tools",
+        friction_patterns=[
+            "multi-file rename or refactor attempted with grep/sed and repeatedly corrected",
+            "regex-based edits breaking syntax",
+            "the same structural change hand-applied file by file",
+        ],
+        remedy=(
+            "Use ast-grep for structural changes: AST-aware search and rewrite "
+            "means one pattern replaces a fragile regex chain and can't produce "
+            "syntactically invalid matches."
+        ),
+        confidence_floor=0.65,
+        action=FixAction(
+            tier=3,
+            label="Install ast-grep",
+            payload="",
+            argv=["brew", "install", "ast-grep"],
+            # brew installs machine-wide regardless of cwd — no repo guard.
+            requires_repo=False,
+            verify_argv=["ast-grep", "--version"],
+            verify_expect="ast-grep",
+        ),
+        # No adoption_tool: ast-grep is a plain CLI — its usage happens
+        # inside Bash tool calls, so it never appears in tools_used and
+        # adoption is not measurable. Left unset rather than faked.
+    ),
+    Fix(
+        id="unmeasured-perf-claims",
+        title="Performance work accepted without measurement",
+        friction_patterns=[
+            "performance improvements claimed or accepted with no before/after numbers",
+            "optimization churn where attempts aren't benchmarked between edits",
+        ],
+        remedy=(
+            "Benchmark with hyperfine: statistical CLI benchmarking with warmup "
+            "and outlier detection — measure before and after instead of "
+            "trusting 'should be faster'."
+        ),
+        confidence_floor=0.65,
+        action=FixAction(
+            tier=3,
+            label="Install hyperfine",
+            payload="",
+            argv=["brew", "install", "hyperfine"],
+            # brew installs machine-wide regardless of cwd — no repo guard.
+            requires_repo=False,
+            verify_argv=["hyperfine", "--version"],
+            verify_expect="hyperfine",
+        ),
+        # No adoption_tool: hyperfine is a plain CLI, invisible to
+        # tools_used — see the ast-grep fix above.
+    ),
+    Fix(
+        id="security-review-skipped",
+        title="Auth or input-handling code shipped without a security pass",
+        friction_patterns=[
+            "auth, crypto, or user-input code written and accepted with no security review",
+            "vulnerabilities or injection concerns surfacing only after completion",
+        ],
+        remedy=(
+            "Install the official security-guidance plugin — it flags risky "
+            "patterns (injection, credential handling, unsafe defaults) as you "
+            "work, instead of after the code ships."
+        ),
+        confidence_floor=0.7,
+        action=FixAction(
+            tier=1,
+            label="Copy the security-guidance plugin install",
+            payload="/plugin install security-guidance@claude-plugins-official",
+        ),
+    ),
+    Fix(
+        id="ui-design-churn",
+        title="Repeated visual-tweak loops on frontend work",
+        friction_patterns=[
+            "many consecutive turns of visual adjustment ('make it look better', spacing/color/alignment corrections)",
+            "dissatisfaction with generic-looking generated UI",
+        ],
+        remedy=(
+            "Install the official frontend-design plugin — opinionated design "
+            "guidance that raises the first attempt's quality instead of "
+            "iterating from mediocre."
+        ),
+        confidence_floor=0.65,
+        action=FixAction(
+            tier=1,
+            label="Copy the frontend-design plugin install",
+            payload="/plugin install frontend-design@claude-plugins-official",
+        ),
+    ),
+    Fix(
+        id="backend-state-by-paste",
+        title="Database or backend state relayed by hand",
+        friction_patterns=[
+            "SQL query results, schemas, or dashboard readouts pasted into the chat for the agent",
+            "the agent asked to reason about live backend state it cannot see",
+        ],
+        remedy=(
+            "Give the agent direct read access: an official database MCP "
+            "server (e.g. Supabase's @supabase/mcp-server-supabase, or a "
+            "Postgres MCP) lets it query schema and data itself instead of "
+            "working from pasted snapshots."
+        ),
+        # INFORM only — no action: credential/token setup is stack-specific
+        # (which database, which host, which auth), so there is no single
+        # safe install argv to ship.
         confidence_floor=0.65,
     ),
 ]
