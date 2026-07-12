@@ -81,8 +81,9 @@ def test_reflect_takes_only_request_param():
 
 
 def test_reflect_returns_suggestions_from_mocked_claude_cli():
+    # Evidence must quote the chunk: the live path verifies against request.chunks.
     mock_response = json.dumps([
-        {"fix_id": "judge-executor-split", "confidence": 0.85, "evidence": ["you re-prompted 3x"], "blunt_summary": "split judge/executor"}
+        {"fix_id": "judge-executor-split", "confidence": 0.85, "evidence": ["no not like that"], "blunt_summary": "split judge/executor"}
     ])
     with patch("vidura.reflect.call_claude_cli", return_value=mock_response):
         response = reflect(_request())
@@ -190,6 +191,108 @@ def test_build_prompt_ends_with_closing_instruction():
 def test_build_prompt_omits_past_friction_when_empty():
     prompt = build_prompt(_request())
     assert "<similar_past_friction>" not in prompt
+
+
+# --- Fix 5: a hallucinated fix_id must be treated as novel ---
+
+
+def test_parse_suggestions_hallucinated_fix_id_becomes_novel():
+    raw = json.dumps([
+        {"fix_id": "made-up-fix", "confidence": 0.85, "evidence": ["quote"], "blunt_summary": "phantom"}
+    ])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 1
+    assert suggestions[0].novel is True
+    # The model's id string is kept so context isn't lost.
+    assert suggestions[0].fix_id == "made-up-fix"
+
+
+def test_parse_suggestions_hallucinated_fix_id_gets_novel_floor():
+    # 0.75 clears the known-fix default floor but not the 0.8 novel floor.
+    raw = json.dumps([
+        {"fix_id": "made-up-fix", "confidence": 0.75, "evidence": ["quote"], "blunt_summary": "phantom"}
+    ])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert suggestions == []
+
+
+def test_parse_suggestions_valid_fix_id_not_marked_novel():
+    raw = json.dumps([
+        {"fix_id": "judge-executor-split", "confidence": 0.75, "evidence": ["quote"], "blunt_summary": "real"}
+    ])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 1
+    assert suggestions[0].novel is False
+    assert suggestions[0].fix_id == "judge-executor-split"
+
+
+# --- Fix 6: evidence quotes are verified against the chunks ---
+
+CHUNK = "[user] please stop rewriting the whole file every time I ask for a small change"
+
+
+def _suggestion_raw(evidence):
+    return json.dumps([
+        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": evidence, "blunt_summary": "s"}
+    ])
+
+
+def test_verification_exact_quote_passes():
+    raw = _suggestion_raw(["stop rewriting the whole file"])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7}, chunks=[CHUNK])
+    assert len(suggestions) == 1
+    assert suggestions[0].evidence == ["stop rewriting the whole file"]
+
+
+def test_verification_whitespace_mangled_quote_passes():
+    raw = _suggestion_raw(["stop  rewriting\n   the whole\tfile"])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7}, chunks=[CHUNK])
+    assert len(suggestions) == 1
+
+
+def test_verification_shingle_overlap_tolerates_light_paraphrase():
+    # 8 words -> 4 shingles; dropping "please" leaves 3 of 4 intact (75% >= 70%).
+    raw = _suggestion_raw(["stop rewriting the whole file every time I"])
+    chunk = "[user] stop rewriting the whole file every time I ask"
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7}, chunks=[chunk])
+    assert len(suggestions) == 1
+
+
+def test_verification_drops_fabricated_quote_keeps_real_one():
+    raw = _suggestion_raw(["you deleted the production database", "stop rewriting the whole file"])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7}, chunks=[CHUNK])
+    assert len(suggestions) == 1
+    assert suggestions[0].evidence == ["stop rewriting the whole file"]
+
+
+def test_verification_drops_suggestion_when_all_evidence_fabricated():
+    raw = _suggestion_raw(["you deleted the production database"])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7}, chunks=[CHUNK])
+    assert suggestions == []
+
+
+def test_verification_drops_non_string_evidence_items():
+    raw = _suggestion_raw([42, {"quote": "nested"}, "stop rewriting the whole file"])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7}, chunks=[CHUNK])
+    assert len(suggestions) == 1
+    assert suggestions[0].evidence == ["stop rewriting the whole file"]
+
+
+def test_verification_skipped_when_chunks_none():
+    raw = _suggestion_raw(["you deleted the production database"])
+    suggestions = parse_suggestions(raw, {"judge-executor-split": 0.7})
+    assert len(suggestions) == 1
+    assert suggestions[0].evidence == ["you deleted the production database"]
+
+
+def test_reflect_verifies_evidence_against_request_chunks():
+    # The live path must always verify: fabricated evidence never reaches callers.
+    mock_response = json.dumps([
+        {"fix_id": "judge-executor-split", "confidence": 0.9, "evidence": ["you deleted the production database"], "blunt_summary": "fake"}
+    ])
+    with patch("vidura.reflect.call_claude_cli", return_value=mock_response):
+        response = reflect(_request())
+    assert response.suggestions == []
 
 
 def test_build_prompt_renders_past_friction_between_sessions_and_fixes():

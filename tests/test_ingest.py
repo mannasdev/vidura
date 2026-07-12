@@ -113,6 +113,81 @@ def test_tool_result_only_turn_flagged(tmp_path):
     assert turns[0].text == "ls output here"
 
 
+def test_tool_result_list_content_extracted(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [{
+            "type": "tool_result",
+            "content": [
+                {"type": "text", "text": "first block"},
+                {"type": "image", "source": {"type": "base64", "data": "..."}},
+                "stray non-dict entry",
+                {"type": "text", "text": "second block"},
+            ],
+        }]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_tool_result is True
+    assert turns[0].text == "first block\nsecond block"
+
+
+def test_tool_result_list_content_without_text_blocks_yields_empty_text(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [{
+            "type": "tool_result",
+            "content": [{"type": "image", "source": {"type": "base64", "data": "..."}}],
+        }]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_tool_result is True
+    assert turns[0].text == ""
+
+
+def test_tool_result_is_error_flag_surfaced(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "is_error": True, "content": "Traceback ..."},
+        ]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_error is True
+
+
+def test_is_error_true_when_any_result_block_errors(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "fine output"},
+            {"type": "tool_result", "is_error": True, "content": "boom"},
+        ]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_error is True
+
+
+def test_is_error_defaults_false(tmp_path):
+    line = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-01T10:00:00.000Z",
+        "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "clean output"},
+        ]},
+    })
+    path = _write_jsonl(tmp_path, [line])
+    turns = list(parse_session(path))
+    assert turns[0].is_error is False
+
+
 def test_human_text_turn_not_flagged_as_tool_result(tmp_path):
     line = json.dumps({
         "type": "user",
@@ -233,3 +308,26 @@ def test_tool_result_list_shaped_ignores_non_text_blocks(tmp_path):
     turns = list(parse_session(path))
     assert turns[0].text == "the actual text"
     assert "base64stuff" not in turns[0].text
+
+
+def test_null_text_blocks_do_not_crash(tmp_path):
+    lines = [
+        json.dumps({
+            "type": "assistant",
+            "timestamp": "2026-07-01T10:00:00.000Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": None}]},
+        }),
+        json.dumps({
+            "type": "user",
+            "timestamp": "2026-07-01T10:00:01.000Z",
+            "message": {"role": "user", "content": [{
+                "type": "tool_result",
+                "content": [{"type": "text", "text": None}],
+            }]},
+        }),
+    ]
+    path = _write_jsonl(tmp_path, lines)
+    turns = list(parse_session(path))
+    assert turns[0].text == ""
+    assert turns[1].is_tool_result is True
+    assert turns[1].text == ""
