@@ -28,6 +28,9 @@ public enum ViduraCore {
 
     /// Resolve an executable path for `tool` (e.g. "vidura-state") in
     /// priority order:
+    ///   0. Preferences.customBinPathRaw()/<tool> — user setting (Settings
+    ///      panel), highest priority so a deliberate GUI choice wins over
+    ///      every ambient/environmental default
     ///   1. $VIDURA_BIN/<tool>            — explicit override
     ///   2. `/usr/bin/env <tool>` via PATH — normal installed CLI
     ///   3. ~/Desktop/Projects/vidura/.venv/bin/<tool> — dev fallback
@@ -71,10 +74,40 @@ public enum ViduraCore {
         whichResolver = defaultWhichResolver
     }
 
+    /// Drop every cached resolution so the next `binPath(_:)` re-resolves
+    /// from scratch. Call this whenever the user changes the custom bin-path
+    /// setting: paths are cached per tool name after first resolution (see
+    /// `binPath`), so without an explicit invalidation a new Settings value
+    /// wouldn't take effect until the process restarted. Unlike the
+    /// test-only reset above, this leaves the injected `whichResolver` alone
+    /// and only clears the path cache — it's the production generalization
+    /// of that helper.
+    public static func invalidateBinPathCache() {
+        cacheLock.lock()
+        resolvedPaths.removeAll()
+        cacheLock.unlock()
+    }
+
     /// The actual (uncached) resolution logic, factored out of `binPath`
     /// so the cache wrapper above stays a thin lock+dictionary shim.
     private static func resolveBinPath(_ tool: String) -> String? {
         let fm = FileManager.default
+
+        // Priority 0: an explicit directory chosen by the user in the
+        // Settings panel outranks every environmental default. A deliberate
+        // GUI choice should never be silently overridden by an inherited
+        // $VIDURA_BIN or a stale PATH. An empty/whitespace-only stored value
+        // means "unset" — the user cleared the field — so it's ignored, not
+        // treated as the root directory.
+        if let raw = Preferences.customBinPathRaw() {
+            let dir = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !dir.isEmpty {
+                let candidate = (dir as NSString).appendingPathComponent(tool)
+                if fm.isExecutableFile(atPath: candidate) {
+                    return candidate
+                }
+            }
+        }
 
         if let binDir = ProcessInfo.processInfo.environment["VIDURA_BIN"] {
             let candidate = (binDir as NSString).appendingPathComponent(tool)
