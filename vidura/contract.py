@@ -16,6 +16,15 @@ so none of them can silently re-cut an already-budgeted payload to a
 smaller size. It comfortably fits ~48k chars of chunks plus prompt
 scaffolding within the reflector's context window.
 
+Calibration (2026-07-13, author machine, 14-day window):
+  800 sessions scanned → 47 friction sessions → ~573k chars of friction
+  chunks total. After PER_SESSION_CHUNK_BUDGET=24k capping, pack_batches
+  produced 15 batches with sizes min=31825 / p50=37677 / max=47484.
+  So 48000 is tight (~300 chars headroom on the densest batch) but does
+  not overflow; raising it would only add prompt scaffolding risk for
+  negligible packing gain. vidura-report at this budget covers ~8% of
+  friction text by design — full coverage is vidura-sweep's job.
+
 sweep.py's pack_batches (not enforce_payload_budget) is the one
 exemption: it packs whole SESSIONS into PAYLOAD_BUDGET_CHARS-sized
 batches up front (never splitting a session across batches, so

@@ -38,3 +38,24 @@ counselor framing (Vidura in meditation; speaks only when it matters).
 **Decision:** M3 ships the menubar widget per the plan. Revisit this as
 an M4+ alternative frontend once the suggestion quality has earned an
 ambient presence.
+
+---
+
+## Cross-agent read-only memory (M4+)
+
+**Idea:** Other agents connect their own MCP client to supermemory and
+read the `vidura` containerTag. Vidura is the sole writer
+(`remember_chunks`). Not a Vidura-built MCP.
+
+**When:** After the M0 kill criterion passes and the local loop is
+trusted enough that other agents should inherit its memory.
+
+---
+
+## Reflector fork sandboxing
+
+**Idea:** Permission / network sandbox for third-party `vidura-reflect`
+implementations that receive redacted chunk text on stdin.
+
+**When:** Only if an OSS fork ecosystem appears after public release.
+See `TODOS.md`.

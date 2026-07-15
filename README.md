@@ -11,37 +11,33 @@ own advice, and a read-only memory API your other agents can draw on.
 
 ## Status
 
-CLI-complete (M0 + sweep + ledger). `vidura-report` runs one reflection
-pass; `vidura-sweep` covers your whole 30-day window in batches and
-persists results to a ledger with accept/dismiss feedback. Everything is
+**v1 loop is built** — report, sweep, ledger, optional supermemory,
+follow-through (`adopted`/`lapsed`), execution (`vidura-do`), Claude Code
+hooks, mood/state CLI, and the menu-bar pet under `pet/`. Everything is
 local except the reflection call itself, which goes through your own
-Claude Code CLI (`claude -p`, sandboxed: no tools, one turn). The
-transcripts being judged are conversations you already had with Claude,
-and they pass a redaction gate first regardless.
+Claude Code CLI (`claude -p`, sandboxed: no tools, one turn). Transcripts
+pass a redaction gate before anything leaves the process.
 
-No menubar app yet — that's M3 (see Roadmap).
+**Open gate:** M0 suggestion quality on *your* real last-30-days logs
+(see [M0 evaluation](#m0-evaluation-the-actual-gate)). Until that passes,
+treat the rest as scaffolding.
 
 ## Requirements
 
 - Python 3.11+
 - [Claude Code](https://claude.com/claude-code) installed and authenticated
   (the reflector backend)
+- macOS 13+ for the menu-bar pet (`pet/`)
 
 ## Roadmap
 
-- **M1-full** — embed session chunks into a local vector index so the
-  reflector can retrieve "similar past friction" across your whole
-  history, not just the current window.
-- **M2** — background watcher: reflect automatically at session close.
-- **M3** — the menu-bar companion: a small pet that sleeps until it has
-  earned counsel, and can *act* on an accepted suggestion (install the
-  skill, apply the workflow) with explicit per-action confirmation.
-- **M4+** — read-only cross-agent memory: delivered via supermemory's own
-  MCP server over the `vidura` containerTag, not a Vidura-built one.
-  Vidura is the sole writer (`remember_chunks`); other agents connect
-  their own MCP client to supermemory and read the same container for
-  cross-session context. Read-only for everyone but Vidura is a hard
-  rule, enforced by supermemory's server, not ours to build.
+- **Now** — calibrate `PAYLOAD_BUDGET_CHARS` against measured session
+  sizes; clear the M0 kill criterion (`vidura-report` → ≥3 non-obvious
+  suggestions).
+- **M4+** — read-only cross-agent memory via supermemory's own MCP over
+  the `vidura` containerTag (Vidura writes only; other agents read).
+  Fork-sandboxing for third-party `vidura-reflect` implementations if an
+  OSS fork ecosystem appears. See `LATER.md` / `TODOS.md`.
 
 ## Setup
 
