@@ -12,6 +12,14 @@ public final class StateModel: ObservableObject {
     @Published private(set) var entries: [LedgerEntry] = []
     @Published private(set) var counts: LedgerCounts = LedgerCounts(accepted: 0, dismissed: 0)
     @Published private(set) var lastError: String?
+    /// A cleaner boolean derived from the same signal as `lastError`'s
+    /// missing-binary case: true iff the last `pollState` failed because the
+    /// CLIs couldn't be found at all (`.binaryNotFound`). Distinct from
+    /// `lastError` — which carries every error string — because the popover
+    /// treats "core entirely absent" as a whole different UI (a setup card,
+    /// not an error line): the pet has no data and can't function until the
+    /// user installs the core. Cleared on the next successful state poll.
+    @Published public private(set) var coreMissing: Bool = false
     /// Set once per STIRRING transition so the popover can show the
     /// "counsel earned" framing even if the user opens it before the
     /// notification banner is dismissed. Not itself a notification.
@@ -131,8 +139,15 @@ public final class StateModel: ObservableObject {
             let decoded = try JSONDecoder().decode(MoodState.self, from: Data(result.stdout.utf8))
             applyNewMood(decoded)
             lastError = nil
+            // A clean decode proves the core is present and answered — clear
+            // the setup-card flag so a corrected install (or a Re-check after
+            // one) drops back to the normal pet without a relaunch.
+            coreMissing = false
         } catch let error as ViduraCore.CoreError {
             lastError = Self.friendlyMessage(for: error)
+            // `coreMissing` tracks only the "CLIs entirely absent" failure,
+            // not timeouts — a timed-out core is installed, just slow.
+            if case .binaryNotFound = error { coreMissing = true }
         } catch {
             lastError = "\(error)"
         }

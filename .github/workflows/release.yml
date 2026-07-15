@@ -1,0 +1,64 @@
+# Ships the downloadable Vidura.app on a version tag.
+#
+# The app is UNSIGNED: no paid Apple Developer account, no notarization, no CI
+# secrets — just the default GITHUB_TOKEN. Users download Vidura.zip from the
+# Release, unzip, and right-click → Open once to clear Gatekeeper's unsigned-app
+# prompt (README owns that instruction). This is deliberate: notarization is a
+# paid account + a notary round-trip, not worth blocking v0.
+#
+# Notarization is a future, ISOLATED add: it drops in as a discrete step between
+# make-app.sh and the ditto zip below —
+#     codesign --deep --options runtime  →  notarytool submit --wait  →  stapler staple
+# gated on two new repo secrets (Developer ID cert + credentials). Nothing else
+# in this workflow changes.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"        # e.g. v0.1.0 → cuts a Release with Vidura.zip attached
+  workflow_dispatch: # manual runs (version defaults to "dev")
+
+permissions:
+  contents: write   # softprops/action-gh-release creates the Release
+
+jobs:
+  release:
+    # macos-14 is Apple silicon and ships a macOS 13+ SDK — matches the app's
+    # LSMinimumSystemVersion 13.0 and builds a native arm64 binary.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tag pushes give refs/tags/vX.Y.Z; strip the leading v for the version
+      # string baked into Info.plist. Manual dispatch has no tag → "dev" (the
+      # same fallback SettingsView's About panel already expects).
+      - name: Derive version
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dev"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building Vidura ${VERSION}"
+
+      # Builds the release binary, generates the icns, and assembles
+      # pet/dist/Vidura.app (resource bundle + Info.plist + icon).
+      - name: Assemble Vidura.app
+        run: bash pet/scripts/make-app.sh "${{ steps.version.outputs.VERSION }}"
+
+      # --keepParent preserves the Vidura.app wrapper inside the zip so the user
+      # unzips to a real .app, not loose Contents/. ditto (not `zip`) keeps the
+      # macOS bundle bit and resource forks intact.
+      - name: Zip the app
+        run: ditto -c -k --keepParent pet/dist/Vidura.app Vidura.zip
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: Vidura.zip

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for Vidura.app/Contents/Info.plist. make-app.sh copies this in and
+     substitutes __VERSION__ (both version keys share one value). This file IS
+     committed; the assembled copy inside dist/Vidura.app is a build artifact. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Vidura</string>
+	<key>CFBundleDisplayName</key>
+	<string>Vidura</string>
+	<key>CFBundleIdentifier</key>
+	<!-- A real bundle id is what un-gates launch-at-login + notifications,
+	     both of which bail out when Bundle.main.bundleIdentifier is nil. -->
+	<string>com.mannasdev.vidura</string>
+	<key>CFBundleExecutable</key>
+	<!-- Must match the SwiftPM product name copied into Contents/MacOS/. -->
+	<string>ViduraPet</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>CFBundleIconFile</key>
+	<!-- Names Contents/Resources/AppIcon.icns (Finder appends .icns). -->
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<!-- Menu-bar accessory: no Dock icon. Matches NSApp.setActivationPolicy(.accessory). -->
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>
