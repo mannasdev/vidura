@@ -216,7 +216,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
-            Task { @MainActor in self?.hidePanel() }
+            // Strong-bind before the Task so the @Sendable closure captures an
+            // immutable `let`, not the weak captured `var` (a hard error on
+            // stricter Swift toolchains — see the same fix in StateModel.start).
+            guard let self else { return }
+            Task { @MainActor in self.hidePanel() }
         }
     }
 

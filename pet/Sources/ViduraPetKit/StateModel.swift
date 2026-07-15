@@ -89,11 +89,18 @@ public final class StateModel: ObservableObject {
         refresh()
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            // Bind `self` strongly before the Task: `[weak self]` makes it a
+            // captured `var`, and referencing that var inside the @Sendable
+            // Task is an error under stricter Swift toolchains (the CI
+            // runner's). The guard-let binds an immutable `let` the Task can
+            // capture cleanly, and no-ops the tick if the model is gone.
+            guard let self else { return }
+            Task { @MainActor in self.refresh() }
         }
         sweepTimer?.invalidate()
         sweepTimer = Timer.scheduledTimer(withTimeInterval: Self.sweepInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.runAmbientSweep() }
+            guard let self else { return }
+            Task { @MainActor in self.runAmbientSweep() }
         }
     }
 
