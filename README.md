@@ -9,6 +9,37 @@ own advice, and a read-only memory API your other agents can draw on.
 > to an unrelated agent orchestrator). The importable module and all
 > commands are still `vidura` / `vidura-*`.
 
+## Install
+
+Two pieces: the **menu-bar app** (the face) and the **core** (the brain).
+The app bootstraps the core on first run, so in practice you just install
+the app.
+
+**The app.** Download `Vidura.zip` from the
+[Releases](https://github.com/mannasdev/vidura/releases) page, unzip it,
+and drag `Vidura.app` to `/Applications`.
+
+The app is **not notarized** (this is an unsigned v0), so Gatekeeper will
+block the first double-click. To get past it, the *first* time you open it
+**right-click (or Control-click) the app → Open → Open** in the dialog.
+That clears the quarantine permanently; after that it opens normally. If
+right-click → Open doesn't offer an Open button, drop the quarantine flag
+by hand:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Vidura.app
+```
+
+**The core.** On first run the pet prompts to install the core for you. To
+do it yourself:
+
+```bash
+pipx install vidura-cli          # preferred (isolated)
+pip install --user vidura-cli    # fallback
+```
+
+**Build from source.** `make app` produces `pet/dist/Vidura.app`.
+
 ## Status
 
 **v1 loop is built** — report, sweep, ledger, optional supermemory,

@@ -59,24 +59,115 @@ public struct CardView: View {
         VStack(alignment: .leading, spacing: 0) {
             hero
 
-            if !celebratableIds.isEmpty {
-                celebrationBanner
-            }
-
-            if state.entries.isEmpty {
-                emptyState
+            // With the core absent the pet has no mood, ledger, or errors
+            // worth showing — every surface below would be empty or
+            // misleading. Swap the whole content block for the setup card
+            // that tells the user how to install the core; the footer chrome
+            // stays so Pets/Settings/Quit and the relative-time line remain.
+            if state.coreMissing {
+                coreSetupCard
             } else {
-                suggestions
-            }
+                if !celebratableIds.isEmpty {
+                    celebrationBanner
+                }
 
-            if let lastError = state.lastError {
-                errorLine(lastError)
+                if state.entries.isEmpty {
+                    emptyState
+                } else {
+                    suggestions
+                }
+
+                if let lastError = state.lastError {
+                    errorLine(lastError)
+                }
             }
 
             footerRule
             footer
         }
     }
+
+    // MARK: - Core-missing setup card
+
+    /// First-run / core-absent state: the CLIs the pet shells out to aren't
+    /// installed, so nothing works. Rather than the tiny red "CLIs not found"
+    /// error line (which reads as a fault, not an instruction), show a
+    /// friendly card that names the fix and offers to copy it or re-check.
+    /// Styled to match `SuggestionCard`'s chrome (bg-card, card radius, border)
+    /// so it sits naturally where a suggestion normally would.
+    private var coreSetupCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Vidura needs its brain")
+                .font(Theme.summaryFont)
+                .foregroundStyle(Theme.textPrimary)
+
+            Text("Install the counsel core to wake the pet.")
+                .font(Theme.footerFont)
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // The install command, framed like an evidence block so it reads
+            // as a literal thing to run, not prose.
+            Text(Self.coreInstallCommand)
+                .font(Theme.evidenceFont)
+                .foregroundStyle(Theme.textSecondary)
+                .textSelection(.enabled)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.bgEvidence)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.evidenceRadius, style: .continuous))
+
+            HStack(spacing: 8) {
+                Button("Copy command") {
+                    #if canImport(AppKit)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(Self.coreInstallCommand, forType: .string)
+                    #endif
+                }
+                .buttonStyle(.plain)
+                .font(Theme.dismissFont)
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.vertical, 7)
+                .padding(.horizontal, 12)
+                .background(Theme.bgEvidence)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.buttonRadius, style: .continuous))
+
+                Spacer(minLength: 0)
+
+                // Re-check invalidates the cached bin-path resolution (so a
+                // just-completed install is seen without a relaunch) and
+                // refreshes — a successful poll clears `coreMissing`.
+                Button("Re-check") {
+                    Task {
+                        ViduraCore.invalidateBinPathCache()
+                        state.refresh()
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(Theme.acceptFont)
+                .foregroundStyle(Theme.accent)
+                .padding(.vertical, 7)
+                .padding(.horizontal, 12)
+                .background(Theme.accentSubtle)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.buttonRadius, style: .continuous))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.bgCard)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .strokeBorder(Theme.border, lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+    }
+
+    /// The exact install command shown in the card and written to the
+    /// pasteboard by "Copy command" — one constant so the two can't drift.
+    private static let coreInstallCommand = "pipx install vidura-cli"
 
     private var celebratableIds: [Int] {
         state.mood?.adoptedUncelebratedIds ?? []
