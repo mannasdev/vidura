@@ -159,12 +159,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         installOutsideClickMonitor()
 
         // The panel hugs its content: when entries/mood change while it
-        // is open (accept, dismiss, poll), re-measure and re-anchor so
-        // there is never a fixed-height void around the content.
+        // is open (accept, dismiss, poll), OR the user navigates between
+        // surfaces (route change: home/pets/settings), re-measure and
+        // re-anchor so there is never a fixed-height void around the content.
+        // `$route` is folded in here precisely because each surface has a
+        // different fitting height and switching must re-fit the panel.
         contentCancellable = state.$entries
-            .combineLatest(state.$mood)
+            .combineLatest(state.$mood, state.$route)
             .receive(on: RunLoop.main)
-            .sink { [weak self] _, _ in
+            .sink { [weak self] _, _, _ in
                 guard let self, let panel = self.panel, panel.isVisible else { return }
                 self.positionPanel(panel)
             }
@@ -198,6 +201,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func hidePanel() {
         panel?.orderOut(nil)
+        // Always reopen on the pet: reset the route so a visit that ended on
+        // the Pets or Settings surface doesn't reappear there next time.
+        state.route = .home
         removeOutsideClickMonitor()
         contentCancellable?.cancel()
         contentCancellable = nil

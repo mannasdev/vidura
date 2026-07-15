@@ -30,6 +30,20 @@ public final class StateModel: ObservableObject {
     /// that already started.
     @Published private(set) var shouldCelebrateOnOpen = false
 
+    /// Which of the three in-panel surfaces (home / pets / settings) the
+    /// shared `NSPanel` is currently showing. Footer buttons set it; the
+    /// back controls reset it to `.home`; `AppDelegate.hidePanel()` also
+    /// resets it so reopening always lands on the pet. See `PanelRoute`.
+    @Published public var route: PanelRoute = .home
+
+    /// User-facing settings (selected pet, notification toggle, custom bin
+    /// path). Held here because it's the one object both `AppDelegate` and
+    /// `CardView` already share, and it gates two behaviors this model owns:
+    /// which sprite `CardView` resolves, and whether `applyNewMood` fires
+    /// the STIRRING banner. Injected (with a default) so tests can supply an
+    /// isolated `Preferences` backed by a scratch `UserDefaults`.
+    public let preferences: Preferences
+
     private var previousMood: String?
     private var pollTimer: Timer?
     private var sweepTimer: Timer?
@@ -42,7 +56,13 @@ public final class StateModel: ObservableObject {
     /// Ambient sweep interval: 30 minutes, per the plan.
     public static let sweepInterval: TimeInterval = 30 * 60
 
-    public init() {
+    /// `preferences` defaults to `nil` (not `Preferences()`) because a default
+    /// argument expression is evaluated in a nonisolated context, and
+    /// `Preferences` is `@MainActor` — constructing it there is a concurrency
+    /// error. The real default is built inside this (main-actor-isolated) body
+    /// instead, where the isolation is satisfied.
+    public init(preferences: Preferences? = nil) {
+        self.preferences = preferences ?? Preferences()
         requestNotificationAuthorization()
     }
 
@@ -50,7 +70,8 @@ public final class StateModel: ObservableObject {
     /// mood, and skips notification-authorization requests (which throw
     /// outside a real app bundle). Used by ContentSizingTests to measure
     /// CardView's fitting size without any CLI calls or live process.
-    public init(preview entries: [LedgerEntry], mood: MoodState?) {
+    public init(preview entries: [LedgerEntry], mood: MoodState?, preferences: Preferences? = nil) {
+        self.preferences = preferences ?? Preferences()
         self.entries = entries
         self.mood = mood
         self.counts = LedgerCounts.derive(from: entries)
@@ -158,14 +179,39 @@ public final class StateModel: ObservableObject {
     /// can be unit-tested without a running StateModel.
     private func applyNewMood(_ new: MoodState) {
         let isStirring = (new.mood == Mood.stirring.rawValue)
-        if MoodTransition.shouldNotify(previous: previousMood, current: new.mood) {
+        let transitionNotify = MoodTransition.shouldNotify(previous: previousMood, current: new.mood)
+        if transitionNotify {
+            // The in-panel "counsel earned" framing (`justEnteredStirring`)
+            // is a UI cue, NOT a notification — it always fires on the
+            // transition so the popover reads correctly regardless of the
+            // user's notification preference. Only the OS banner is gated by
+            // `notificationsEnabled`; muting notifications must never mute
+            // the glyph/panel signal (plan requirement).
             justEnteredStirring = true
-            fireStirringNotification(pendingCount: new.pendingCount)
+            if Self.shouldFireStirring(
+                notificationsEnabled: preferences.notificationsEnabled,
+                transitionNotify: transitionNotify
+            ) {
+                fireStirringNotification(pendingCount: new.pendingCount)
+            }
         } else if !isStirring {
             justEnteredStirring = false
         }
         previousMood = new.mood
         mood = new
+    }
+
+    /// Pure decision for whether the STIRRING OS banner should fire: both the
+    /// mood actually transitioned into STIRRING (`transitionNotify`, from
+    /// `MoodTransition.shouldNotify`) AND the user has notifications enabled.
+    /// Factored out — like `MoodTransition.shouldNotify` — so the AND-gate
+    /// can be unit-tested without a running `StateModel` or notification
+    /// center.
+    /// `nonisolated` so the pure AND-gate can be unit-tested synchronously
+    /// from a non-main-actor test context (`NotificationGatingTests`) — it
+    /// touches no isolated state, exactly like `MoodTransition.shouldNotify`.
+    nonisolated static func shouldFireStirring(notificationsEnabled: Bool, transitionNotify: Bool) -> Bool {
+        notificationsEnabled && transitionNotify
     }
 
     // MARK: - Notifications

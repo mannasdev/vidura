@@ -22,7 +22,40 @@ public struct CardView: View {
         self.state = state
     }
 
+    /// The panel is a single window whose *content* swaps by route (spec:
+    /// footer buttons navigate in-place, the panel re-fits — see
+    /// `PanelRoute`). The outer chrome (fixed width, bg-panel, corner
+    /// radius, border, Do-confirm sheet, refresh-on-appear) is shared by ALL
+    /// routes and therefore lives on this `Group`, not inside any one
+    /// surface; `PetsView` / `SettingsView` draw inner content only.
     public var body: some View {
+        Group {
+            switch state.route {
+            case .home:
+                homeContent
+            case .pets:
+                PetsView(state: state, prefs: state.preferences)
+            case .settings:
+                SettingsView(state: state, prefs: state.preferences)
+            }
+        }
+        .frame(width: 400)
+        .background(Theme.bgPanel)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous)
+                .strokeBorder(Theme.border, lineWidth: 1)
+        )
+        .sheet(item: $pendingDoAction) { context in
+            DoConfirmSheet(context: context, state: state)
+        }
+        .onAppear { state.refresh() }
+    }
+
+    /// The `.home` surface: the hero card and everything below it. Extracted
+    /// out of `body` so the outer panel chrome can wrap the route switch
+    /// (see `body`) while this stays the exact same content it always was.
+    private var homeContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             hero
 
@@ -43,17 +76,6 @@ public struct CardView: View {
             footerRule
             footer
         }
-        .frame(width: 400)
-        .background(Theme.bgPanel)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous)
-                .strokeBorder(Theme.border, lineWidth: 1)
-        )
-        .sheet(item: $pendingDoAction) { context in
-            DoConfirmSheet(context: context, state: state)
-        }
-        .onAppear { state.refresh() }
     }
 
     private var celebratableIds: [Int] {
@@ -64,11 +86,19 @@ public struct CardView: View {
         PetMood(rawMood: state.mood?.mood ?? Mood.asleep.rawValue)
     }
 
-    /// The current earned character's kebab id, defaulting to
-    /// "temple-cat" (today's shipped look) when the Python core hasn't
-    /// shipped the character fields yet — see `MoodState.effectiveCharacter`.
+    /// The character id whose sprite the hero draws. Reconciles the user's
+    /// Pets-picker choice against the core's earned diagnosis via
+    /// `PetResolution.resolve`: a real pin wins, `"auto"` defers to the core,
+    /// and a stale/unknown pin falls back to Auto. The `earned` argument is
+    /// the core's `effectiveCharacter`, defaulted to "temple-cat" (today's
+    /// shipped look) when a pre-character-system core omits the field — see
+    /// `MoodState.effectiveCharacter`. Pinning swaps only the costume, never
+    /// the mood/behavior (see `PetResolution`).
     private var currentCharacter: String {
-        state.mood?.effectiveCharacter ?? CharacterAsset.defaultCharacter
+        PetResolution.resolve(
+            selection: state.preferences.selectedPet,
+            earned: state.mood?.effectiveCharacter ?? CharacterAsset.defaultCharacter
+        )
     }
 
     private var characterCaption: String {
@@ -230,8 +260,8 @@ public struct CardView: View {
                 .foregroundStyle(Theme.textTertiary)
             Spacer()
             HStack(spacing: 14) {
-                Button("Pets") {}
-                Button("Settings") {}
+                Button("Pets") { state.route = .pets }
+                Button("Settings") { state.route = .settings }
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }
             .buttonStyle(.plain)
