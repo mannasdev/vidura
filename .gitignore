@@ -3,5 +3,11 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .venv/
-docs/
+# docs/ stays local (internal planning docs), except the public README assets
+# and the moved M0 evaluation doc, which are whitelisted below.
+docs/*
+!docs/design/
+docs/design/*
+!docs/design/m0-evaluation.md
+!docs/images/
 .gstack/

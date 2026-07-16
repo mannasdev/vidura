@@ -11,18 +11,28 @@ with no character_history row yet defaults to the "face" placeholder
 so consumers never have to guess which keys exist.
 """
 
+import argparse
 import json
 import sys
 from datetime import datetime, timezone
 
 from vidura.mood import compute_mood
 from vidura.store import current_character, open_db
+from vidura.version import package_version
 
 DEFAULT_CHARACTER = "face"
 DEFAULT_CHARACTER_REASON = "still getting to know you"
 
 
 def main(argv: list[str] | None = None) -> int:
+    # --help/--version must exit before the DB is even opened.
+    parser = argparse.ArgumentParser(
+        prog="vidura-state",
+        description="Print the pet's current mood + character state as JSON.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
+    parser.parse_args(argv)
+
     conn = open_db()
     try:
         result = compute_mood(conn)

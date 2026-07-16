@@ -14,6 +14,7 @@ import sys
 from vidura.executor import CwdGuardError, ExecutionDeclined, ExecutionError, execute_action
 from vidura.fix_index import load_fix_index
 from vidura.store import ledger_entries, open_db
+from vidura.version import package_version
 
 
 def _tty_confirm(prompt: str) -> bool:
@@ -29,9 +30,17 @@ def _find_fix(fix_id: str):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="vidura-do")
-    parser.add_argument("id", type=int)
-    parser.add_argument("--dry-run", action="store_true")
+    parser = argparse.ArgumentParser(
+        prog="vidura-do",
+        description="Act on an accepted suggestion: run its fix action after a confirmation prompt.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
+    parser.add_argument("id", type=int, help="ledger id of an accepted suggestion (see vidura-ledger list)")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview the exact action; execute nothing, record nothing",
+    )
     parser.add_argument(
         "--yes",
         action="store_true",

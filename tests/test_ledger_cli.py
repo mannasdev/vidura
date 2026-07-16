@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from vidura.contract import Suggestion
 from vidura.ledger_cli import main
 from vidura.store import ledger_entries, open_db, record_suggestion, set_status
@@ -164,3 +166,15 @@ def test_celebrate_unknown_id_exits_nonzero(tmp_path, monkeypatch, capsys):
     _seed(tmp_path, monkeypatch)
     assert main(["celebrate", "999"]) == 1
     assert "no suggestion with id" in capsys.readouterr().err
+
+
+def test_help_documents_subcommands(monkeypatch, capsys):
+    # Fixed width so argparse's help wrapping can't split the asserted phrases.
+    monkeypatch.setenv("COLUMNS", "120")
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "mark a suggestion accepted" in out
+    assert "never re-suggested" in out
+    assert "the default when no subcommand is given" in out

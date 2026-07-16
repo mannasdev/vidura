@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 from vidura.contract import Suggestion
 from vidura.do_cli import main
 from vidura.store import ledger_entries, open_db, record_suggestion, set_status
@@ -229,3 +231,14 @@ def test_write_cwd_guard_exits_one_no_traceback(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "terminal inside the target repo" in err
     assert not (tmp_path / "CLAUDE.md").exists()
+
+
+def test_help_documents_id_and_dry_run(monkeypatch, capsys):
+    # Fixed width so argparse's help wrapping can't split the asserted phrases.
+    monkeypatch.setenv("COLUMNS", "120")
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "ledger id of an accepted suggestion" in out
+    assert "execute nothing, record nothing" in out

@@ -13,6 +13,7 @@ ReflectorError — subprocess/parsing exceptions can escape reflect()'s own
 net and must still degrade rather than crash the caller.
 """
 
+import argparse
 import json
 import sys
 
@@ -26,9 +27,20 @@ from vidura.contract import (
     validate_contract_version,
 )
 from vidura.reflect import ReflectorError, reflect
+from vidura.version import package_version
 
 
 def main(argv: list[str] | None = None) -> int:
+    # argv is handled BEFORE stdin: pre-W2, `vidura-reflect --help`
+    # blocked forever waiting for stdin on a TTY. A bare invocation
+    # parses nothing and keeps the stdin-JSON contract unchanged.
+    parser = argparse.ArgumentParser(
+        prog="vidura-reflect",
+        description="Reflector subprocess: read a JSON ReflectRequest on stdin, write a JSON ReflectResponse to stdout.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
+    parser.parse_args(argv)
+
     raw_input = sys.stdin.read()
 
     try:

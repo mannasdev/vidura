@@ -34,6 +34,7 @@ from pathlib import Path
 
 from vidura.reflect import CLAUDE_CLI_CWD_TOKEN
 from vidura.store import ledger_entries, open_db
+from vidura.version import package_version
 
 # Overridable via env/monkeypatch so tests never touch the real support
 # dir or the real ~/.claude — see tests/test_hooks_cli.py.
@@ -355,13 +356,20 @@ def cmd_status(argv: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="vidura-hook")
+    parser = argparse.ArgumentParser(
+        prog="vidura-hook",
+        description="Claude Code lifecycle hooks: the hook entrypoints plus install/uninstall/status for ~/.claude/settings.json.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("session-end")
-    sub.add_parser("session-start")
-    sub.add_parser("install")
-    sub.add_parser("uninstall")
-    sub.add_parser("status")
+    for name, blurb in (
+        ("session-end", "SessionEnd hook: spawn a detached incremental sweep"),
+        ("session-start", "SessionStart hook: print one line if suggestions are pending"),
+        ("install", "add the hooks to ~/.claude/settings.json (backs up the original)"),
+        ("uninstall", "remove the hooks from ~/.claude/settings.json"),
+        ("status", "show whether the hooks are installed"),
+    ):
+        sub.add_parser(name, help=blurb, description=blurb)
     args, _rest = parser.parse_known_args(argv)
 
     if args.command == "session-end":

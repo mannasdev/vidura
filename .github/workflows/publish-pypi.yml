@@ -1,0 +1,55 @@
+# Publishes vidura-cli to PyPI on a version tag via Trusted Publishing.
+#
+# One-time setup this workflow depends on: a "pending publisher" registered at
+# https://pypi.org/manage/account/publishing/ with project name vidura-cli,
+# owner mannasdev, repo vidura, workflow filename publish-pypi.yml, and
+# environment name pypi. No secrets — OIDC only, matching release.yml's
+# no-CI-secrets stance. Deliberately a separate file from release.yml:
+# that file carries workflow-level contents:write and a workflow_dispatch
+# trigger, and the publish action below is Linux-only anyway.
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install pypa/build
+        run: python3 -m pip install build --user
+      - name: Build sdist and wheel
+        run: python3 -m build
+      - uses: actions/upload-artifact@v5
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/vidura-cli
+    permissions:
+      id-token: write  # mandatory for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

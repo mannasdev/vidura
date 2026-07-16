@@ -13,6 +13,8 @@ repeated error) contribute chunks to the payload — this keeps the
 payload budget (Task 7) spent on signal, not on every routine session.
 """
 
+import argparse
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +32,7 @@ from vidura.redact import redact
 from vidura.reflect import CLAUDE_CLI_CWD_TOKEN, ReflectorError, reflect
 from vidura.signals import extract_signals
 from vidura.store import _sanitize, blocked_fix_ids, ledger_summary_for_prompt, open_db
+from vidura.version import package_version
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 # 14 days, not 30: old friction shouldn't drive counsel — habits may have
@@ -182,7 +185,27 @@ def print_report(request: ReflectRequest, blocked: set[str] | None = None) -> in
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    # Args are parsed BEFORE any DB open or session scan: pre-W2, a
+    # stray `vidura-report --help` silently started a full paid
+    # reflection instead of printing help.
+    parser = argparse.ArgumentParser(
+        prog="vidura-report",
+        description="One reflection pass over your recent Claude Code sessions: print a friction report.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
+    parser.parse_args(argv)
+
+    # First-run guidance, TTY only: a human at a terminal is told what
+    # to install; non-TTY callers (hooks, cron, the pet) keep the
+    # existing degrade-to-silence contract in print_report untouched.
+    if shutil.which("claude") is None and sys.stdout.isatty():
+        print(
+            "vidura-report: Claude Code (the `claude` CLI) is not on your PATH. "
+            "Vidura uses it as its reflector. Install: https://claude.com/claude-code"
+        )
+        return 0
+
     sessions = find_recent_sessions()
     if not sessions:
         print(f"No Claude Code sessions found in the last {DEFAULT_WINDOW_DAYS} days.")

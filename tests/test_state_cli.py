@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from vidura.state_cli import main
 from vidura.store import open_db, record_character, record_suggestion
 from tests.test_store import _sugg
@@ -85,3 +87,12 @@ def test_cli_reflects_recorded_character(tmp_path, monkeypatch, capsys):
     assert payload["character"] == "founder"
     assert payload["character_since"] == "2026-07-01T00:00:00+00:00"
     assert payload["character_reason"] == "The Founder — 41 sessions and 52 hours in 14 days"
+
+
+def test_help_exits_zero_without_opening_db(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError("--help must not open the DB")
+    monkeypatch.setattr("vidura.state_cli.open_db", _boom)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0

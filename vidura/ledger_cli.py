@@ -12,6 +12,7 @@ import sys
 
 from vidura.fix_index import load_fix_index
 from vidura.store import _sanitize, ledger_entries, mark_celebrated, open_db, set_status
+from vidura.version import package_version
 
 
 def _list(conn) -> None:
@@ -60,13 +61,27 @@ def _list_json(conn) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="vidura-ledger")
+    parser = argparse.ArgumentParser(
+        prog="vidura-ledger",
+        description="List, accept, or dismiss suggestions (no subcommand: list).",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
     sub = parser.add_subparsers(dest="command")
-    list_parser = sub.add_parser("list")
-    list_parser.add_argument("--json", action="store_true", dest="as_json")
-    for action in ("accept", "dismiss", "celebrate"):
-        p = sub.add_parser(action)
-        p.add_argument("id", type=int)
+    list_blurb = "show all suggestions (the default when no subcommand is given)"
+    list_parser = sub.add_parser("list", help=list_blurb, description=list_blurb)
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="print the ledger as a JSON array (stdout carries only JSON, for UI callers)",
+    )
+    for action, blurb in (
+        ("accept", "mark a suggestion accepted (act on it with vidura-do <id>)"),
+        ("dismiss", "dismiss a suggestion; a dismissed fix is never re-suggested"),
+        ("celebrate", "mark an adopted suggestion celebrated (the pet's proud state fires once)"),
+    ):
+        p = sub.add_parser(action, help=blurb, description=blurb)
+        p.add_argument("id", type=int, help="suggestion id (first column of vidura-ledger list)")
     args = parser.parse_args(argv)
 
     conn = open_db()
