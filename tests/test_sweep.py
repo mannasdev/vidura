@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from vidura.store import mark_reflected, open_db
 from vidura.sweep import (
     PER_SESSION_CHUNK_BUDGET,
@@ -673,3 +675,14 @@ def test_sweep_memory_less_end_to_end_green(tmp_path, monkeypatch, capsys):
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "judge-executor-split" in out
+
+
+def test_help_documents_batches_and_window_days(monkeypatch, capsys):
+    # Fixed width so argparse's help wrapping can't split the asserted phrases.
+    monkeypatch.setenv("COLUMNS", "120")
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "max batches per run" in out
+    assert "days of sessions to scan" in out

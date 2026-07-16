@@ -301,3 +301,15 @@ def test_status_reports_installed_state(tmp_path, monkeypatch, capsys):
 def test_main_dispatches_subcommands(tmp_path, monkeypatch, capsys):
     _setup(tmp_path, monkeypatch)
     assert main(["status"]) == 0
+
+
+def test_help_documents_subcommands(monkeypatch, capsys):
+    # Fixed width so argparse's help wrapping can't split the asserted phrases.
+    monkeypatch.setenv("COLUMNS", "120")
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "detached incremental sweep" in out
+    assert "settings.json" in out
+    assert "whether the hooks are installed" in out

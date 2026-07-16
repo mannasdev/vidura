@@ -39,6 +39,7 @@ from vidura.store import (
     open_db,
     record_suggestion,
 )
+from vidura.version import package_version
 
 PER_SESSION_CHUNK_BUDGET = 24000
 DEFAULT_MAX_BATCHES = 20
@@ -355,10 +356,24 @@ def _print_ledger_report(conn) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="vidura-sweep")
+    parser = argparse.ArgumentParser(
+        prog="vidura-sweep",
+        description="Full-coverage sweep: reflect every friction session in batches and merge suggestions into the ledger.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
     parser.add_argument("--full", action="store_true", help=f"run all batches (default: top {DEFAULT_MAX_BATCHES} densest)")
-    parser.add_argument("--batches", type=int, default=DEFAULT_MAX_BATCHES)
-    parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
+    parser.add_argument(
+        "--batches",
+        type=int,
+        default=DEFAULT_MAX_BATCHES,
+        help=f"max batches per run (default: {DEFAULT_MAX_BATCHES}; ignored with --full)",
+    )
+    parser.add_argument(
+        "--window-days",
+        type=int,
+        default=DEFAULT_WINDOW_DAYS,
+        help=f"days of sessions to scan (default: {DEFAULT_WINDOW_DAYS})",
+    )
     parser.add_argument(
         "--rescan",
         action="store_true",

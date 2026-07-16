@@ -1,7 +1,10 @@
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from vidura.contract import CONTRACT_VERSION, ReflectResponse, Suggestion
 from vidura.report import DEFAULT_WINDOW_DAYS, build_report_request, find_recent_sessions, main, print_report
@@ -257,7 +260,7 @@ def test_print_report_strips_control_chars(capsys):
 
 def test_main_no_sessions_found(monkeypatch, capsys):
     monkeypatch.setattr("vidura.report.find_recent_sessions", lambda: [])
-    exit_code = main()
+    exit_code = main([])
     assert exit_code == 0
     assert "No Claude Code sessions found" in capsys.readouterr().out
 
@@ -340,7 +343,7 @@ def test_main_prints_no_suggestions_when_only_blocked_fix_returned(tmp_path, mon
         suggestions=[Suggestion(fix_id="judge-executor-split", confidence=0.9, evidence=["e"], blunt_summary="dismissed one")],
     )
     with patch("vidura.report.reflect", return_value=response):
-        exit_code = main()
+        exit_code = main([])
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "No suggestions this run" in out
@@ -364,7 +367,7 @@ def test_main_passes_ledger_summary_into_request(tmp_path, monkeypatch):
 
     response = ReflectResponse(contract_version=CONTRACT_VERSION, suggestions=[])
     with patch("vidura.report.reflect", return_value=response) as mock_reflect:
-        main()
+        main([])
     assert mock_reflect.call_count == 1
     request_arg = mock_reflect.call_args[0][0]
     assert request_arg.ledger
@@ -382,3 +385,40 @@ def test_find_recent_sessions_excludes_vidura_reflector_sessions(tmp_path):
     sessions = find_recent_sessions(root=tmp_path, window_days=30)
     assert normal in sessions
     assert all("-vidura-reflector-cwd" not in str(p) for p in sessions)
+
+
+def test_main_help_exits_zero_before_db_or_session_scan(monkeypatch):
+    """--help must cost nothing: no DB open, no session scan — and
+    definitely not the pre-W2 behavior of silently starting a full paid
+    reflection."""
+    def _boom(*args, **kwargs):
+        raise AssertionError("--help must not open the DB or scan sessions")
+    monkeypatch.setattr("vidura.report.open_db", _boom)
+    monkeypatch.setattr("vidura.report.find_recent_sessions", _boom)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+
+
+def test_main_missing_claude_on_tty_prints_install_pointer(monkeypatch, capsys):
+    monkeypatch.setattr("vidura.report.shutil.which", lambda cmd: None)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    exit_code = main([])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Claude Code" in out
+    assert "https://claude.com/claude-code" in out
+
+
+def test_main_missing_claude_non_tty_proceeds_to_session_scan(monkeypatch, capsys):
+    """Non-TTY callers (hooks, cron, the pet) keep today's contract
+    byte-identically: no first-run banner, just the normal path (which
+    degrades to silence later if the reflector is truly unavailable)."""
+    monkeypatch.setattr("vidura.report.shutil.which", lambda cmd: None)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr("vidura.report.find_recent_sessions", lambda: [])
+    exit_code = main([])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "No Claude Code sessions found" in out
+    assert "claude.com/claude-code" not in out
