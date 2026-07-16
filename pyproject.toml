@@ -3,10 +3,24 @@
 # maintained agent orchestrator (name-collision check, 2026-07-10).
 # The project/brand stays Vidura; the import package stays `vidura`.
 name = "vidura-cli"
-version = "0.0.1"
+version = "0.1.0"
 description = "A local counselor that reads your Claude Code session logs and tells you the truth about your friction patterns."
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: MacOS",
+    "Environment :: Console",
+]
+
+[project.urls]
+Homepage = "https://github.com/mannasdev/vidura"
+Releases = "https://github.com/mannasdev/vidura/releases"
+Issues = "https://github.com/mannasdev/vidura/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
